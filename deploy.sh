@@ -97,7 +97,9 @@ create_environment() {
   printf '%s' "$ADMIN_EMAIL" | grep -Eq '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' || fail "Invalid administrator email."
   [ "${#ADMIN_PASSWORD}" -ge 12 ] || fail "Administrator password must contain at least 12 characters."
   printf '%s' "$ADMIN_PASSWORD" | grep -Eq '^[A-Za-z0-9._~-]+$' || fail "Initial password may only contain letters, numbers, dot, underscore, tilde, and hyphen."
-  printf '%s' "$ADMIN_ALLOWED_IPS" | grep -Eq '^[A-Fa-f0-9:.,[:space:]]*$' || fail "Invalid administrator IP allowlist."
+  if [ -n "$ADMIN_ALLOWED_IPS" ]; then
+    printf '%s\n' "$ADMIN_ALLOWED_IPS" | grep -Eq '^[A-Fa-f0-9:.,[:space:]]+$' || fail "Invalid administrator IP allowlist."
+  fi
 
   command -v openssl >/dev/null 2>&1 || fail "OpenSSL is required to generate secrets."
   umask 077
