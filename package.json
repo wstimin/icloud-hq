@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "worker": "node src/worker.js",
-    "check": "node --check src/server.js && node --check src/worker.js && node --check src/lib.js && node --check src/extract.js && node --check public/admin.js && node --check public/query.js && node --check public/login.js",
+    "check": "node --check src/server.js && node --check src/worker.js && node --check src/lib.js && node --check src/extract.js && node --check src/totp.js && node --check public/admin.js && node --check public/query.js && node --check public/login.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {

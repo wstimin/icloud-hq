@@ -51,9 +51,16 @@ CREATE TABLE IF NOT EXISTS aliases (
   token_digest TEXT UNIQUE,
   token_hint TEXT,
   token_expires_at TIMESTAMPTZ,
+  totp_secret_encrypted TEXT,
+  totp_issuer TEXT NOT NULL DEFAULT '',
+  totp_account_name TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE aliases ADD COLUMN IF NOT EXISTS totp_secret_encrypted TEXT;
+ALTER TABLE aliases ADD COLUMN IF NOT EXISTS totp_issuer TEXT NOT NULL DEFAULT '';
+ALTER TABLE aliases ADD COLUMN IF NOT EXISTS totp_account_name TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS verification_messages (
   id BIGSERIAL PRIMARY KEY,

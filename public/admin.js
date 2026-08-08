@@ -65,7 +65,7 @@ function render() {
   document.querySelector('#audit-table').innerHTML = table(['操作者', '动作', '目标', '时间'], data.audit.slice(0, 12).map((row) => `<tr><td>${escapeHtml(row.actor)}</td><td>${escapeHtml(row.action)}</td><td>${escapeHtml(row.target || row.detail)}</td><td>${formatDate(row.created_at)}</td></tr>`));
 
   document.querySelector('#accounts-table').innerHTML = table(['邮箱', 'IMAP', '状态', '最后同步', '操作'], data.accounts.map((row) => `<tr><td><strong>${escapeHtml(row.email)}</strong>${row.last_error ? `<br><small class="danger-text">${escapeHtml(row.last_error)}</small>` : ''}</td><td>${escapeHtml(row.host)}:${row.port}</td><td>${badge(row.status, row.enabled)}</td><td>${formatDate(row.last_synced_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-account-toggle="${row.id}">${row.enabled ? '暂停' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除" aria-label="删除" data-account-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
-  document.querySelector('#aliases-table').innerHTML = table(['子邮箱', '备注', '密钥提示', '状态', '最近收信', '操作'], data.aliases.map((row) => `<tr><td><strong>${escapeHtml(row.address)}</strong></td><td>${escapeHtml(row.label || '-')}</td><td>末六位 ${escapeHtml(row.token_hint || '-')}</td><td>${row.enabled ? '<span class="badge">已启用</span>' : '<span class="badge off">已停用</span>'}</td><td>${formatDate(row.last_received_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-alias-reset="${row.id}">重置密钥</button><button class="btn btn-secondary" data-alias-toggle="${row.id}">${row.enabled ? '停用' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除" aria-label="删除" data-alias-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
+  document.querySelector('#aliases-table').innerHTML = table(['子邮箱', '备注', '密钥提示', '2FA', '状态', '最近收信', '操作'], data.aliases.map((row) => `<tr><td><strong>${escapeHtml(row.address)}</strong></td><td>${escapeHtml(row.label || '-')}</td><td>末六位 ${escapeHtml(row.token_hint || '-')}</td><td>${row.totp_enabled ? `<span class="badge">已绑定</span>${row.totp_issuer ? `<br><small class="muted">${escapeHtml(row.totp_issuer)}</small>` : ''}` : '<span class="badge off">未绑定</span>'}</td><td>${row.enabled ? '<span class="badge">已启用</span>' : '<span class="badge off">已停用</span>'}</td><td>${formatDate(row.last_received_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-alias-totp="${row.id}">${row.totp_enabled ? '更换 2FA' : '绑定 2FA'}</button>${row.totp_enabled ? `<button class="btn btn-danger btn-icon" title="删除 2FA" aria-label="删除 2FA" data-alias-totp-delete="${row.id}"><i data-lucide="shield-x" class="icon"></i></button>` : ''}<button class="btn btn-secondary" data-alias-reset="${row.id}">重置密钥</button><button class="btn btn-secondary" data-alias-toggle="${row.id}">${row.enabled ? '停用' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除子邮箱" aria-label="删除子邮箱" data-alias-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
 
   document.querySelector('#totp-status').textContent = data.admin.totpEnabled ? 'TOTP 动态验证码已启用。' : 'TOTP 尚未启用，管理员登录目前只使用密码。';
   document.querySelector('#setup-totp').classList.toggle('hidden', data.admin.totpEnabled);
@@ -107,6 +107,16 @@ function bindRowActions() {
     if (!confirm('旧查询密钥会立即失效，确认重置？')) return;
     const data = await api(`/api/admin/aliases/${button.dataset.aliasReset}/regenerate`, { method: 'POST' }); await loadState(); showSecret(data.token);
   }));
+  document.querySelectorAll('[data-alias-totp]').forEach((button) => button.addEventListener('click', () => {
+    const alias = state.data.aliases.find((row) => String(row.id) === button.dataset.aliasTotp);
+    openAliasTotp(alias);
+  }));
+  document.querySelectorAll('[data-alias-totp-delete]').forEach((button) => button.addEventListener('click', async () => {
+    if (!confirm('删除后前台将不再显示该子邮箱的 2FA 动态码。确认继续？')) return;
+    await api(`/api/admin/aliases/${button.dataset.aliasTotpDelete}/totp`, { method: 'DELETE' });
+    await loadState();
+    toastMessage('子邮箱 2FA 已删除');
+  }));
   document.querySelectorAll('[data-alias-toggle]').forEach((button) => button.addEventListener('click', async () => {
     await api(`/api/admin/aliases/${button.dataset.aliasToggle}/toggle`, { method: 'POST' }); await loadState();
   }));
@@ -114,6 +124,27 @@ function bindRowActions() {
     if (!confirm('删除后，该子邮箱的验证码记录也会删除。确认继续？')) return;
     await api(`/api/admin/aliases/${button.dataset.aliasDelete}`, { method: 'DELETE' }); await loadState();
   }));
+}
+
+function openAliasTotp(alias) {
+  if (!alias) return;
+  openModal(alias.totp_enabled ? '更换子邮箱 2FA' : '绑定子邮箱 2FA', `<p class="muted">将第三方平台显示的 Base32 手动密钥或 <code>otpauth://</code> 地址绑定到 ${escapeHtml(alias.address)}。原始密钥保存后不会回显。</p><form id="alias-totp-form"><div class="field"><label for="alias-totp-secret">2FA 手动密钥或 otpauth 地址</label><textarea id="alias-totp-secret" rows="5" maxlength="4096" required autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP 或 otpauth://totp/..."></textarea></div>${alias.totp_enabled ? '<p class="muted compact-note">保存后会覆盖当前 2FA 配置。</p>' : ''}<p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="save" class="icon"></i><span>保存 2FA</span></button></div></form>`);
+  document.querySelector('[data-cancel]').addEventListener('click', closeModal);
+  document.querySelector('#alias-totp-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      await api(`/api/admin/aliases/${alias.id}/totp`, { method: 'PUT', body: JSON.stringify({ secret: document.querySelector('#alias-totp-secret').value.trim() }) });
+      closeModal();
+      await loadState();
+      toastMessage(alias.totp_enabled ? '子邮箱 2FA 已更换' : '子邮箱 2FA 已绑定');
+    } catch (error) {
+      document.querySelector('#modal-error').textContent = error.message;
+      button.disabled = false;
+    }
+  });
+  lucide.createIcons();
 }
 
 document.querySelectorAll('.nav button[data-section]').forEach((button) => button.addEventListener('click', () => {
