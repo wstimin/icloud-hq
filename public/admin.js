@@ -134,7 +134,7 @@ function render() {
     ['at-sign', '启用子邮箱', data.aliases.filter((row) => row.enabled).length],
     ['search-check', '今日成功查询', data.metrics.queries_today],
     ['shield-alert', '今日失败查询', data.metrics.query_failures_today],
-    ['shield-keyhole', '今日 2FA 转换', data.metrics.totp_conversions_today],
+    ['fingerprint', '今日 2FA 转换', data.metrics.totp_conversions_today],
     ['log-in', '今日登录失败', data.metrics.login_failures_today]
   ].map(([icon, label, value]) => `<div class="stat"><div class="stat-label"><i data-lucide="${icon}" class="icon"></i>${label}</div><div class="stat-value">${value}</div></div>`).join('');
 

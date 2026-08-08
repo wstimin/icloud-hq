@@ -42,8 +42,10 @@ test('mail, alias, and TOTP records have scoped edit routes', () => {
   assert.match(admin, /page-title'\)\.textContent = button\.title/);
   assert.match(adminHtml, /class="nav-totp" data-section="totp-entries"/);
   assert.match(adminHtml, /data-lucide="shield-user"/);
-  assert.match(adminHtml, /vendor\/lucide\.js\?v=20260809-2/);
-  assert.match(adminHtml, /admin\.js\?v=20260809-2/);
+  assert.match(adminHtml, /vendor\/lucide\.js\?v=20260809-3/);
+  assert.match(adminHtml, /admin\.js\?v=20260809-3/);
+  assert.match(adminHtml, /class="twofa-mark"[^>]*>2F</);
+  assert.doesNotMatch(adminHtml, /data-lucide="shield-keyhole"/);
   assert.match(styles, /\.nav button > span:not\(\.nav-icon\)/);
 });
 
