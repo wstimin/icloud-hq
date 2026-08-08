@@ -144,8 +144,8 @@ async function ensureAdmin() {
   if (result.rows[0].count > 0) return;
   const email = normalizeEmail(process.env.ADMIN_EMAIL);
   const password = String(process.env.ADMIN_PASSWORD || '');
-  if (!validEmail(email) || password.length < 12 || password.startsWith('replace-')) {
-    throw new Error('Set a valid ADMIN_EMAIL and an ADMIN_PASSWORD of at least 12 characters before first boot');
+  if (!validEmail(email) || password.length < 8 || password.startsWith('replace-')) {
+    throw new Error('Set a valid ADMIN_EMAIL and an ADMIN_PASSWORD of at least 8 characters before first boot');
   }
   const passwordHash = await hashPassword(password);
   await pool.query('INSERT INTO users(email, password_hash) VALUES ($1, $2)', [email, passwordHash]);
@@ -409,7 +409,7 @@ app.post('/api/admin/totp/enable', ...adminApi(async (req, res) => {
 app.post('/api/admin/password', ...adminApi(async (req, res) => {
   const currentPassword = String(req.body.currentPassword || '');
   const newPassword = String(req.body.newPassword || '');
-  if (newPassword.length < 12) return res.status(400).json({ error: '新密码至少需要 12 个字符' });
+  if (newPassword.length < 8) return res.status(400).json({ error: '新密码至少需要 8 个字符' });
   const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.admin.id]);
   if (!(await verifyPassword(currentPassword, result.rows[0].password_hash))) return res.status(401).json({ error: '当前密码不正确' });
   await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [await hashPassword(newPassword), req.admin.id]);

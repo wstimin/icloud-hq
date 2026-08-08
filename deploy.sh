@@ -87,7 +87,7 @@ create_environment() {
   ACME_EMAIL="$REPLY"
   prompt "Initial administrator email"
   ADMIN_EMAIL="$REPLY"
-  prompt_secret "Initial administrator password (at least 12 characters)"
+  prompt_secret "Initial administrator password (at least 8 characters)"
   ADMIN_PASSWORD="$REPLY"
   prompt "Administrator IP allowlist, comma-separated; leave blank for any IP"
   ADMIN_ALLOWED_IPS="$REPLY"
@@ -95,7 +95,7 @@ create_environment() {
   printf '%s' "$DOMAIN" | grep -Eq '^[A-Za-z0-9.-]+$' || fail "Invalid domain."
   printf '%s' "$ACME_EMAIL" | grep -Eq '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' || fail "Invalid certificate email."
   printf '%s' "$ADMIN_EMAIL" | grep -Eq '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' || fail "Invalid administrator email."
-  [ "${#ADMIN_PASSWORD}" -ge 12 ] || fail "Administrator password must contain at least 12 characters."
+  [ "${#ADMIN_PASSWORD}" -ge 8 ] || fail "Administrator password must contain at least 8 characters."
   printf '%s' "$ADMIN_PASSWORD" | grep -Eq '^[A-Za-z0-9._~-]+$' || fail "Initial password may only contain letters, numbers, dot, underscore, tilde, and hyphen."
   if [ -n "$ADMIN_ALLOWED_IPS" ]; then
     printf '%s\n' "$ADMIN_ALLOWED_IPS" | grep -Eq '^[A-Fa-f0-9:.,[:space:]]+$' || fail "Invalid administrator IP allowlist."

@@ -12,13 +12,13 @@ printf "Let's Encrypt email: "
 read ACME_EMAIL
 printf "Initial administrator email: "
 read ADMIN_EMAIL
-printf "Initial administrator password (at least 12 characters): "
+printf "Initial administrator password (at least 8 characters): "
 stty -echo
 read ADMIN_PASSWORD
 stty echo
 printf "\n"
 
-if [ "${#ADMIN_PASSWORD}" -lt 12 ]; then
+if [ "${#ADMIN_PASSWORD}" -lt 8 ]; then
   echo "Administrator password is too short."
   exit 1
 fi
