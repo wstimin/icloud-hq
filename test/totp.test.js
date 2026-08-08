@@ -90,10 +90,15 @@ test('public page keeps mail and TOTP in separate tabs and forms', () => {
   assert.match(html, /id="mail-query-form"/);
   assert.match(html, /id="totp-query-form"/);
   assert.match(html, /id="totp-secret"/);
+  assert.match(html, />转换 2FA</);
+  assert.doesNotMatch(html, /转换并保存 2FA/);
+  assert.match(html, /class="output-surface totp-output-surface"/);
   assert.doesNotMatch(html, /id="totp-token"/);
   assert.match(script, /request\('\/api\/query', \{ token: mailTokenInput/);
   assert.match(script, /request\('\/api\/query\/totp', \{ entries \}\)/);
   assert.match(script, /const activeTotps = new Map\(\)/);
+  assert.match(script, /function renderTotpAvatar/);
+  assert.match(script, /class="totp-entry"/);
 });
 
 test('public QR recognition stays local and only fills the raw TOTP input', () => {

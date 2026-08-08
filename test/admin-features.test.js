@@ -7,6 +7,8 @@ const assert = require('node:assert/strict');
 const server = fs.readFileSync('src/server.js', 'utf8');
 const schema = fs.readFileSync('src/schema.sql', 'utf8');
 const admin = fs.readFileSync('public/admin.js', 'utf8');
+const adminHtml = fs.readFileSync('public/admin.html', 'utf8');
+const styles = fs.readFileSync('public/styles.css', 'utf8');
 
 test('mail, alias, and TOTP records have scoped edit routes', () => {
   const mailEdit = server.slice(
@@ -35,6 +37,12 @@ test('mail, alias, and TOTP records have scoped edit routes', () => {
   assert.match(admin, /openAliasEditor/);
   assert.match(admin, /openTotpEditor/);
   assert.match(admin, /不会修改原始 2FA 密钥/);
+  assert.match(admin, /function renderTotpAvatar/);
+  assert.match(admin, /class="admin-totp-platform"/);
+  assert.match(admin, /page-title'\)\.textContent = button\.title/);
+  assert.match(adminHtml, /class="nav-totp" data-section="totp-entries"/);
+  assert.match(adminHtml, /data-lucide="shield-user"/);
+  assert.match(styles, /\.nav button > span:not\(\.nav-icon\)/);
 });
 
 test('mail accounts support fixed iCloud, Gmail, and Outlook provider presets', () => {

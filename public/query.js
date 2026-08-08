@@ -71,6 +71,23 @@ function totpTitle(item) {
   return names.length ? names.join(' · ') : `2FA 密钥末四位 ${item.data.secretHint}`;
 }
 
+function totpPlatform(issuer) {
+  const value = String(issuer || '').trim();
+  const normalized = value.toLowerCase();
+  if (/google|gmail/.test(normalized)) return { tone: 'google', mark: 'G' };
+  if (/microsoft|outlook|office|azure/.test(normalized)) return { tone: 'microsoft', mark: 'M' };
+  if (/github/.test(normalized)) return { tone: 'github', mark: 'GH' };
+  if (/apple|icloud/.test(normalized)) return { tone: 'apple', mark: 'A' };
+  if (/discord/.test(normalized)) return { tone: 'discord', mark: 'D' };
+  if (/telegram/.test(normalized)) return { tone: 'telegram', mark: 'T' };
+  return { tone: 'default', mark: value ? value.slice(0, 1).toUpperCase() : '2F' };
+}
+
+function renderTotpAvatar(issuer) {
+  const platform = totpPlatform(issuer);
+  return `<span class="totp-platform-avatar tone-${platform.tone}" aria-hidden="true">${escapeHtml(platform.mark)}</span>`;
+}
+
 function renderTotps() {
   const entries = [...activeTotps.values()];
   totpResultBox.classList.toggle('hidden', !entries.length);
@@ -78,11 +95,11 @@ function renderTotps() {
     clearInterval(totpCountdownTimer);
     return;
   }
-  totpResultBox.innerHTML = `<div class="result-meta"><strong>当前会话中的 2FA</strong><span>${entries.length} 条独立密钥</span></div><div class="totp-entry-list">${entries.map((item) => `
+  totpResultBox.innerHTML = `<div class="result-meta totp-result-meta"><strong>当前会话中的 2FA</strong><span>${entries.length} 条独立密钥</span></div><div class="totp-entry-list">${entries.map((item) => `
     <section class="totp-entry" data-totp-entry="${item.data.id}">
-      <div class="totp-entry-head"><div><h2>${escapeHtml(totpTitle(item))}</h2><p>密钥末四位 ${escapeHtml(item.data.secretHint)}</p></div><button class="btn btn-danger btn-icon" type="button" data-remove-totp="${item.data.id}" title="从当前页面移除" aria-label="从当前页面移除"><i data-lucide="x" class="icon"></i></button></div>
-      <div class="code-line"><span class="code-value">${escapeHtml(item.data.code)}</span><button class="btn btn-secondary btn-icon" type="button" data-copy-totp="${item.data.id}" title="复制 2FA 验证码" aria-label="复制 2FA 验证码"><i data-lucide="copy" class="icon"></i></button></div>
-      <div class="result-detail"><span data-totp-remaining="${item.data.id}">${item.data.remaining} 秒后自动刷新</span></div>
+      <div class="totp-entry-head"><div class="totp-identity">${renderTotpAvatar(item.data.issuer)}<div><h2>${escapeHtml(item.data.issuer || '未命名平台')}</h2><p>${escapeHtml(item.data.accountName || `密钥末四位 ${item.data.secretHint}`)}</p></div></div><button class="btn btn-danger btn-icon" type="button" data-remove-totp="${item.data.id}" title="从当前页面移除" aria-label="从当前页面移除"><i data-lucide="x" class="icon"></i></button></div>
+      <div class="totp-code-line"><span class="code-value totp-code-value">${escapeHtml(item.data.code)}</span><button class="btn btn-secondary btn-icon" type="button" data-copy-totp="${item.data.id}" title="复制 2FA 验证码" aria-label="复制 2FA 验证码"><i data-lucide="copy" class="icon"></i></button></div>
+      <div class="totp-entry-foot"><span class="totp-live-dot"></span><span data-totp-remaining="${item.data.id}">${item.data.remaining} 秒后自动刷新</span><span class="totp-secret-hint">末四位 ${escapeHtml(item.data.secretHint)}</span></div>
     </section>`).join('')}</div>`;
   document.querySelectorAll('[data-copy-totp]').forEach((button) => button.addEventListener('click', () => {
     copyCode(activeTotps.get(button.dataset.copyTotp).data.code, '2FA 验证码已复制');

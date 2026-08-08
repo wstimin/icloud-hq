@@ -40,7 +40,7 @@
           </section>
           <section class="workspace-card output-card">
             <header class="workspace-card-head"><span class="workspace-icon output"><i data-lucide="radio" class="icon"></i></span><div><span class="card-kicker">LIVE OUTPUT</span><h2>实时查询结果</h2></div></header>
-            <div class="output-surface">
+            <div class="output-surface mail-output-surface">
               <div class="result-placeholder"><span class="placeholder-icon"><i data-lucide="mail-search"></i></span><strong>等待查询邮箱验证码</strong><p>提交查询密钥后，最新有效验证码会显示在这里。</p></div>
               <div id="mail-result" class="result hidden" aria-live="polite"></div>
             </div>
@@ -64,13 +64,13 @@
                 <div class="field"><label for="totp-account-name">账号备注（可选）</label><input id="totp-account-name" maxlength="160" placeholder="例如 user@example.com"></div>
               </div>
               <p id="totp-query-error" class="message" role="alert"></p>
-              <button class="btn btn-primary btn-block btn-large" type="submit"><i data-lucide="key-round" class="icon"></i><span>转换并保存 2FA</span></button>
+              <button class="btn btn-primary btn-block btn-large totp-convert-button" type="submit"><i data-lucide="key-round" class="icon"></i><span>转换 2FA</span></button>
             </form>
           </section>
           <section class="workspace-card output-card">
             <header class="workspace-card-head"><span class="workspace-icon output"><i data-lucide="scan-line" class="icon"></i></span><div><span class="card-kicker">LIVE OUTPUT</span><h2>动态验证码</h2></div></header>
-            <div class="output-surface">
-              <div class="result-placeholder"><span class="placeholder-icon"><i data-lucide="shield-check"></i></span><strong>等待输入 2FA 密钥</strong><p>转换后可在当前页面同时查看多条动态验证码。</p></div>
+            <div class="output-surface totp-output-surface">
+              <div class="result-placeholder totp-placeholder"><span class="placeholder-icon totp-placeholder-icon"><span class="totp-placeholder-avatar"><i data-lucide="shield-keyhole"></i></span></span><strong>等待输入 2FA 密钥</strong><p>转换后的平台与动态验证码会显示在这里。</p><div class="placeholder-code" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
               <div id="totp-result" class="result hidden" aria-live="polite"></div>
             </div>
           </section>
