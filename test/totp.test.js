@@ -33,7 +33,27 @@ test('generates the RFC 6238 compatible six digit token and timing metadata', ()
 
 test('server responses never expose a stored TOTP secret', () => {
   const server = require('node:fs').readFileSync('src/server.js', 'utf8');
-  assert.match(server, /totp: aliasTotpResponse\(alias\)/);
+  assert.match(server, /res\.json\(\{ alias: maskEmail\(alias\.address\), label: alias\.label, totp: aliasTotpResponse\(alias\) \}\)/);
   assert.match(server, /totp_secret_encrypted IS NOT NULL\) AS totp_enabled/);
   assert.doesNotMatch(server, /res\.json\([^\n]*parsed\.secret/);
+});
+
+test('mail and TOTP queries use separate public responses', () => {
+  const server = require('node:fs').readFileSync('src/server.js', 'utf8');
+  const mailRoute = server.slice(server.indexOf("app.post('/api/query'"), server.indexOf("app.post('/api/query/totp'"));
+  const totpRoute = server.slice(server.indexOf("app.post('/api/query/totp'"), server.indexOf("app.put('/api/query/totp'"));
+  assert.doesNotMatch(mailRoute, /aliasTotpResponse/);
+  assert.doesNotMatch(totpRoute, /verification_messages|code_encrypted/);
+});
+
+test('public page keeps mail and TOTP in separate tabs and forms', () => {
+  const fs = require('node:fs');
+  const html = fs.readFileSync('public/index.html', 'utf8');
+  const script = fs.readFileSync('public/query.js', 'utf8');
+  assert.match(html, /data-query-tab="mail"/);
+  assert.match(html, /data-query-tab="totp"/);
+  assert.match(html, /id="mail-query-form"/);
+  assert.match(html, /id="totp-query-form"/);
+  assert.match(script, /request\('\/api\/query', mailTokenInput/);
+  assert.match(script, /request\('\/api\/query\/totp', totpTokenInput/);
 });

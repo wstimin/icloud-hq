@@ -195,3 +195,6 @@ document.querySelector('#logout').addEventListener('click', async () => { await 
 
 lucide.createIcons();
 loadState().catch((error) => toastMessage(error.message));
+setInterval(() => {
+  if (!document.hidden && !modalRoot.children.length) loadState().catch(() => {});
+}, 15000);

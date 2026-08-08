@@ -82,7 +82,12 @@ a { color: inherit; }
   border-radius: 8px; box-shadow: var(--shadow); padding: 34px;
 }
 .query-tool h1 { font-size: 28px; line-height: 1.2; margin: 0 0 9px; }
-.query-tool > p { color: var(--muted); margin: 0 0 26px; line-height: 1.7; }
+.query-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 22px 0 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); }
+.query-tab { min-height: 44px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 680; }
+.query-tab.active { background: var(--surface); color: var(--brand-dark); box-shadow: 0 1px 4px rgba(18,34,43,.1); }
+.query-panel { display: none; }
+.query-panel.active { display: block; }
+.query-panel > p { color: var(--muted); margin: 0 0 22px; line-height: 1.7; }
 .token-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
 .result { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 25px; }
 .result-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; color: var(--muted); }
@@ -93,6 +98,7 @@ a { color: inherit; }
 .code-line { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 17px 0; }
 .code-value { font: 750 34px/1 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 .result-detail { display: grid; gap: 7px; color: var(--muted); }
+.result-empty { margin: 20px 0 0; }
 .totp-manage { padding-top: 20px; }
 .totp-form { margin-top: 18px; }
 .compact-note { margin: 10px 0 0; font-size: 12px; line-height: 1.6; }
@@ -170,6 +176,7 @@ tr:last-child td { border-bottom: 0; }
   .public-head, .public-foot { width: calc(100% - 28px); }
   .query-tool { padding: 24px 20px; }
   .query-tool h1 { font-size: 24px; }
+  .query-tab { min-width: 0; padding-inline: 8px; }
   .token-row { grid-template-columns: 1fr; }
   .token-row .btn { width: 100%; }
   .code-value { font-size: 28px; }

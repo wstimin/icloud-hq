@@ -244,16 +244,31 @@ app.post('/api/query', async (req, res, next) => {
         subject: message.subject,
         receivedAt: message.received_at,
         expiresAt: message.expires_at
-      } : null,
-      totp: aliasTotpResponse(alias)
+      } : null
     });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/query/totp', async (req, res, next) => {
+  noStore(res);
+  const ip = extractClientIp(req);
+  const limit = rateLimit(`query-totp-code:${ip}`, 300, 10 * 60 * 1000);
+  if (!limit.allowed) return res.status(429).json({ error: '2FA 查询过于频繁，请稍后再试' });
+  try {
+    const token = String(req.body.token || '').trim();
+    const alias = await findPublicAlias(token);
+    if (!alias) {
+      await audit({ actor: 'public', action: 'alias_totp_query_failed', ip, detail: 'unknown token' });
+      return res.status(401).json({ error: '查询密钥无效或已失效' });
+    }
+    res.json({ alias: maskEmail(alias.address), label: alias.label, totp: aliasTotpResponse(alias) });
   } catch (error) { next(error); }
 });
 
 app.put('/api/query/totp', async (req, res, next) => {
   noStore(res);
   const ip = extractClientIp(req);
-  const limit = rateLimit(`query-totp:${ip}`, 10, 10 * 60 * 1000);
+  const limit = rateLimit(`query-totp-save:${ip}`, 10, 10 * 60 * 1000);
   if (!limit.allowed) return res.status(429).json({ error: '2FA 绑定操作过于频繁，请稍后再试' });
   try {
     const token = String(req.body.token || '').trim();
@@ -270,24 +285,16 @@ app.put('/api/query/totp', async (req, res, next) => {
       [encrypt(parsed.secret), parsed.issuer, parsed.accountName, alias.id]
     );
     await audit({ actor: `alias:${alias.id}`, action: 'alias_totp_saved_public', target: String(alias.id), ip });
-    res.json({ ok: true, totp: { ...generated, issuer: parsed.issuer, accountName: parsed.accountName } });
+    res.json({
+      ok: true,
+      alias: maskEmail(alias.address),
+      label: alias.label,
+      totp: { ...generated, issuer: parsed.issuer, accountName: parsed.accountName }
+    });
   } catch (error) {
     if (/TOTP|HOTP|2FA|Base32|otpauth/.test(error.message || '')) return res.status(400).json({ error: error.message });
     next(error);
   }
-});
-
-app.post('/api/query/totp/code', async (req, res, next) => {
-  noStore(res);
-  const ip = extractClientIp(req);
-  const limit = rateLimit(`query-totp-code:${ip}`, 60, 10 * 60 * 1000);
-  if (!limit.allowed) return res.status(429).json({ error: '2FA 动态码刷新过于频繁，请稍后再试' });
-  try {
-    const token = String(req.body.token || '').trim();
-    const alias = await findPublicAlias(token);
-    if (!alias) return res.status(401).json({ error: '查询密钥无效或已失效' });
-    res.json({ totp: aliasTotpResponse(alias) });
-  } catch (error) { next(error); }
 });
 
 app.post('/api/admin/login', adminNetwork, async (req, res, next) => {
