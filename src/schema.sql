@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS login_challenges (
 CREATE TABLE IF NOT EXISTS mail_accounts (
   id BIGSERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL DEFAULT 'icloud',
   app_password_encrypted TEXT NOT NULL,
   host TEXT NOT NULL DEFAULT 'imap.mail.me.com',
   port INTEGER NOT NULL DEFAULT 993,
@@ -60,6 +61,12 @@ CREATE TABLE IF NOT EXISTS mail_accounts (
 
 ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS uid_validity TEXT;
 ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS sync_requested_at TIMESTAMPTZ;
+ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'icloud';
+UPDATE mail_accounts SET provider = CASE
+  WHEN LOWER(host) = 'imap.gmail.com' THEN 'gmail'
+  WHEN LOWER(host) IN ('outlook.office365.com', 'imap-mail.outlook.com') THEN 'outlook'
+  ELSE provider
+END;
 
 CREATE TABLE IF NOT EXISTS aliases (
   id BIGSERIAL PRIMARY KEY,

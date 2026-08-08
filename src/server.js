@@ -24,6 +24,11 @@ const workerFreshSeconds = Math.max(90, Number(process.env.IMAP_POLL_SECONDS || 
 const adminAllowedIps = new Set(String(process.env.ADMIN_ALLOWED_IPS || '')
   .split(',').map((item) => item.trim()).filter(Boolean));
 const rateBuckets = new Map();
+const mailProviders = Object.freeze({
+  icloud: { host: 'imap.mail.me.com', port: 993, secure: true },
+  gmail: { host: 'imap.gmail.com', port: 993, secure: true },
+  outlook: { host: 'outlook.office365.com', port: 993, secure: true }
+});
 
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -53,6 +58,12 @@ app.use('/assets', express.static(path.join(__dirname, '..', 'public'), {
 function noStore(res) {
   res.set('Cache-Control', 'no-store, max-age=0');
   res.set('Pragma', 'no-cache');
+}
+
+function mailAccountConfig(body, current = null) {
+  const provider = String(body.provider || current?.provider || 'icloud').trim().toLowerCase();
+  if (!mailProviders[provider]) throw new Error('UNSUPPORTED_MAIL_PROVIDER');
+  return { provider, ...mailProviders[provider] };
 }
 
 function readCookie(req, name) {
@@ -399,7 +410,7 @@ app.get('/api/admin/state', ...adminApi(async (req, res) => {
   noStore(res);
   const currentSessionHash = digest(req.sessionToken);
   const [accounts, aliases, totpEntries, recent, unmatched, auditResult, metrics, runtime, sessions] = await Promise.all([
-    pool.query(`SELECT id, email, host, port, secure, enabled, status, last_error, last_synced_at, sync_requested_at, created_at FROM mail_accounts ORDER BY id`),
+    pool.query(`SELECT id, email, provider, host, port, secure, enabled, status, last_error, last_synced_at, sync_requested_at, created_at FROM mail_accounts ORDER BY id`),
     pool.query(`SELECT a.id, a.mail_account_id, a.address, a.label, a.enabled, a.token_hint, a.token_expires_at, a.created_at,
       (a.token_encrypted IS NOT NULL) AS token_recoverable,
       (SELECT received_at FROM verification_messages v WHERE v.alias_id = a.id ORDER BY received_at DESC LIMIT 1) AS last_received_at
@@ -473,20 +484,20 @@ app.post('/api/admin/sessions/revoke-others', ...adminApi(async (req, res) => {
 app.post('/api/admin/mail-account', ...adminApi(async (req, res) => {
   const email = normalizeEmail(req.body.email);
   const appPassword = String(req.body.appPassword || '').trim();
-  const host = String(req.body.host || 'imap.mail.me.com').trim();
-  const imapPort = Number(req.body.port || 993);
-  if (!validEmail(email) || appPassword.length < 8 || !host || imapPort < 1 || imapPort > 65535) {
-    return res.status(400).json({ error: '请填写有效的邮箱和 IMAP 配置' });
+  const config = mailAccountConfig(req.body);
+  if (!validEmail(email) || appPassword.length < 8) {
+    return res.status(400).json({ error: '请填写有效的邮箱和授权密码' });
   }
-  await testImap({ email, password: appPassword, host, port: imapPort, secure: true });
+  await testImap({ email, password: appPassword, ...config });
   const result = await pool.query(
-    `INSERT INTO mail_accounts(email, app_password_encrypted, host, port, secure, status, last_error)
-     VALUES ($1, $2, $3, $4, TRUE, 'connected', NULL)
+    `INSERT INTO mail_accounts(email, provider, app_password_encrypted, host, port, secure, status, last_error)
+     VALUES ($1, $2, $3, $4, $5, $6, 'connected', NULL)
      ON CONFLICT (email) DO UPDATE SET app_password_encrypted = EXCLUDED.app_password_encrypted,
-       host = EXCLUDED.host, port = EXCLUDED.port, secure = TRUE, enabled = TRUE,
+       provider = EXCLUDED.provider, host = EXCLUDED.host, port = EXCLUDED.port,
+       secure = EXCLUDED.secure, enabled = TRUE,
        status = 'connected', last_error = NULL, updated_at = NOW()
-     RETURNING id, email`,
-    [email, encrypt(appPassword), host, imapPort]
+     RETURNING id, email, provider`,
+    [email, config.provider, encrypt(appPassword), config.host, config.port, config.secure]
   );
   await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_saved', target: email, ip: extractClientIp(req) });
   res.json({ ok: true, account: result.rows[0] });
@@ -496,22 +507,57 @@ app.patch('/api/admin/mail-account/:id', ...adminApi(async (req, res) => {
   const current = await pool.query('SELECT * FROM mail_accounts WHERE id = $1', [req.params.id]);
   if (!current.rowCount) return res.status(404).json({ error: '母邮箱不存在' });
   const email = normalizeEmail(req.body.email);
-  const host = String(req.body.host || 'imap.mail.me.com').trim();
-  const imapPort = Number(req.body.port || 993);
+  const config = mailAccountConfig(req.body, current.rows[0]);
   const suppliedPassword = String(req.body.appPassword || '').trim();
-  const appPassword = suppliedPassword || decrypt(current.rows[0].app_password_encrypted);
-  if (!validEmail(email) || !host || imapPort < 1 || imapPort > 65535) {
-    return res.status(400).json({ error: '请填写有效的邮箱和 IMAP 配置' });
+  if (suppliedPassword && suppliedPassword.length < 8) {
+    return res.status(400).json({ error: '邮箱授权密码至少需要 8 个字符' });
   }
-  await testImap({ email, password: appPassword, host, port: imapPort, secure: true });
+  if (config.provider !== current.rows[0].provider && !suppliedPassword) {
+    return res.status(400).json({ error: '切换邮箱服务商时需要填写对应的新授权密码' });
+  }
+  const appPassword = suppliedPassword || decrypt(current.rows[0].app_password_encrypted);
+  if (!validEmail(email)) {
+    return res.status(400).json({ error: '请填写有效的邮箱地址' });
+  }
+  await testImap({ email, password: appPassword, ...config });
   const result = await pool.query(
-    `UPDATE mail_accounts SET email = $1, host = $2, port = $3,
-       app_password_encrypted = $4, status = 'connected', last_error = NULL,
-       updated_at = NOW() WHERE id = $5 RETURNING id, email`,
-    [email, host, imapPort, suppliedPassword ? encrypt(suppliedPassword) : current.rows[0].app_password_encrypted, req.params.id]
+    `UPDATE mail_accounts SET email = $1, provider = $2, host = $3, port = $4,
+       secure = $5, app_password_encrypted = $6, status = 'connected', last_error = NULL,
+       updated_at = NOW() WHERE id = $7 RETURNING id, email, provider`,
+    [email, config.provider, config.host, config.port, config.secure,
+      suppliedPassword ? encrypt(suppliedPassword) : current.rows[0].app_password_encrypted, req.params.id]
   );
   await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_edited', target: result.rows[0].email, ip: extractClientIp(req) });
   res.json({ ok: true, account: result.rows[0] });
+}));
+
+app.post('/api/admin/mail-account/:id/secrets', ...adminApi(async (req, res) => {
+  noStore(res);
+  const ip = extractClientIp(req);
+  const limit = rateLimit(`admin-mail-secret:${req.admin.id}:${ip}`, 10, 15 * 60 * 1000);
+  if (!limit.allowed) return res.status(429).json({ error: '敏感信息查看过于频繁，请稍后再试' });
+
+  const passwordResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.admin.id]);
+  if (!passwordResult.rowCount || !(await verifyPassword(String(req.body.password || ''), passwordResult.rows[0].password_hash))) {
+    await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_secret_reveal_failed', target: String(req.params.id), ip });
+    return res.status(403).json({ error: '当前管理员密码不正确' });
+  }
+
+  const result = await pool.query(
+    `SELECT email, provider, host, port, app_password_encrypted
+     FROM mail_accounts WHERE id = $1`,
+    [req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '母邮箱不存在' });
+  const account = result.rows[0];
+  await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_secret_revealed', target: account.email, ip });
+  res.json({
+    email: account.email,
+    provider: account.provider,
+    host: account.host,
+    port: account.port,
+    appPassword: decrypt(account.app_password_encrypted)
+  });
 }));
 
 app.post('/api/admin/mail-account/:id/toggle', ...adminApi(async (req, res) => {
@@ -762,8 +808,11 @@ app.use((error, req, res, _next) => {
   if (error.code === '23503') {
     return res.status(400).json({ error: '关联的母邮箱不存在或已被删除' });
   }
+  if (error.message === 'UNSUPPORTED_MAIL_PROVIDER') {
+    return res.status(400).json({ error: '目前只支持 iCloud、Gmail 和 Outlook 邮箱' });
+  }
   const known = /authentication|login|credentials/i.test(error.message || '');
-  res.status(known ? 400 : 500).json({ error: known ? 'iCloud IMAP 登录失败，请检查邮箱和 App 专用密码' : '服务器处理失败' });
+  res.status(known ? 400 : 500).json({ error: known ? '邮箱 IMAP 登录失败，请检查邮箱、授权密码以及服务商是否允许 IMAP 登录' : '服务器处理失败' });
 });
 
 async function start() {

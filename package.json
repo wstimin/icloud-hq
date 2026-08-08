@@ -2,7 +2,7 @@
   "name": "icloud-code-vault",
   "version": "1.0.0",
   "private": true,
-  "description": "Private iCloud alias verification-code inbox for authorized mailboxes",
+  "description": "Private multi-provider verification-code inbox for authorized mailboxes",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

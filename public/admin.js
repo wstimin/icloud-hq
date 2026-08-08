@@ -50,6 +50,54 @@ function matches(value, query) {
   return String(value || '').toLowerCase().includes(query);
 }
 
+const mailProviderDetails = Object.freeze({
+  icloud: {
+    label: 'iCloud',
+    host: 'imap.mail.me.com:993',
+    passwordLabel: 'Apple App 专用密码',
+    passwordPlaceholder: 'xxxx-xxxx-xxxx-xxxx',
+    help: '请在 Apple 账户中开启双重认证并创建 App 专用密码，不要填写 Apple ID 日常登录密码。'
+  },
+  gmail: {
+    label: 'Gmail',
+    host: 'imap.gmail.com:993',
+    passwordLabel: 'Google 应用专用密码',
+    passwordPlaceholder: '16 位应用专用密码',
+    help: 'Google 账户需要开启两步验证并创建应用专用密码，同时确保该账户允许使用 IMAP。'
+  },
+  outlook: {
+    label: 'Outlook',
+    host: 'outlook.office365.com:993',
+    passwordLabel: 'Outlook IMAP 授权密码',
+    passwordPlaceholder: '密码或应用专用密码',
+    help: '仅支持允许传统 IMAP 凭据登录的账户。强制现代认证的 Microsoft 账户或企业租户需要 OAuth，本版本暂不支持。'
+  }
+});
+
+function inferMailProvider(account = {}) {
+  if (mailProviderDetails[account.provider]) return account.provider;
+  if (account.host === 'imap.gmail.com') return 'gmail';
+  if (account.host === 'outlook.office365.com' || account.host === 'imap-mail.outlook.com') return 'outlook';
+  return 'icloud';
+}
+
+function mailProviderOptions(selected = 'icloud') {
+  return Object.entries(mailProviderDetails).map(([value, detail]) =>
+    `<option value="${value}" ${value === selected ? 'selected' : ''}>${detail.label}</option>`
+  ).join('');
+}
+
+function updateMailProviderFields(prefix, options = {}) {
+  const provider = document.querySelector(`#${prefix}-provider`).value;
+  const detail = mailProviderDetails[provider];
+  document.querySelector(`#${prefix}-password-label`).textContent = detail.passwordLabel;
+  document.querySelector(`#${prefix}-password`).placeholder = options.keepPassword
+    ? '留空表示不修改'
+    : detail.passwordPlaceholder;
+  document.querySelector(`#${prefix}-imap`).value = detail.host;
+  document.querySelector(`#${prefix}-help`).textContent = detail.help;
+}
+
 function sessionDevice(userAgent) {
   const value = String(userAgent || '未知设备');
   if (/iphone|ipad/i.test(value)) return 'Apple 移动设备';
@@ -98,7 +146,7 @@ function render() {
   document.querySelector('#unmatched-table').innerHTML = table(['发件人', '主题', '收件信息', '收到时间'], data.unmatched.map((row) => `<tr><td>${escapeHtml(row.sender)}</td><td>${escapeHtml(row.subject)}</td><td>${escapeHtml(row.recipient_headers.slice(0, 120))}</td><td>${formatDate(row.received_at)}</td></tr>`));
   document.querySelector('#audit-table').innerHTML = table(['操作者', '动作', '目标', '时间'], data.audit.slice(0, 12).map((row) => `<tr><td>${escapeHtml(row.actor)}</td><td>${escapeHtml(row.action)}</td><td>${escapeHtml(row.target || row.detail)}</td><td>${formatDate(row.created_at)}</td></tr>`));
 
-  document.querySelector('#accounts-table').innerHTML = table(['邮箱', 'IMAP', '状态', '最后同步', '操作'], data.accounts.map((row) => `<tr><td><strong>${escapeHtml(row.email)}</strong>${row.last_error ? `<br><small class="danger-text">${escapeHtml(row.last_error)}</small>` : ''}</td><td>${escapeHtml(row.host)}:${row.port}</td><td>${badge(row.status, row.enabled)}</td><td>${formatDate(row.last_synced_at)}${row.sync_requested_at ? '<br><small class="muted">已加入优先同步队列</small>' : ''}</td><td><div class="actions"><button class="btn btn-secondary btn-icon" title="编辑母邮箱" aria-label="编辑母邮箱" data-account-edit="${row.id}"><i data-lucide="pencil" class="icon"></i></button><button class="btn btn-secondary btn-icon" title="请求同步" aria-label="请求同步" data-account-sync="${row.id}" ${row.enabled ? '' : 'disabled'}><i data-lucide="refresh-cw" class="icon"></i></button><button class="btn btn-secondary" data-account-toggle="${row.id}">${row.enabled ? '暂停' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除" aria-label="删除" data-account-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
+  document.querySelector('#accounts-table').innerHTML = table(['邮箱', '服务商', 'IMAP', '状态', '最后同步', '操作'], data.accounts.map((row) => `<tr><td><strong>${escapeHtml(row.email)}</strong>${row.last_error ? `<br><small class="danger-text">${escapeHtml(row.last_error)}</small>` : ''}</td><td>${escapeHtml(mailProviderDetails[inferMailProvider(row)].label)}</td><td>${escapeHtml(row.host)}:${row.port}</td><td>${badge(row.status, row.enabled)}</td><td>${formatDate(row.last_synced_at)}${row.sync_requested_at ? '<br><small class="muted">已加入优先同步队列</small>' : ''}</td><td><div class="actions"><button class="btn btn-secondary btn-icon" title="编辑母邮箱" aria-label="编辑母邮箱" data-account-edit="${row.id}"><i data-lucide="pencil" class="icon"></i></button><button class="btn btn-secondary" data-account-secrets="${row.id}"><i data-lucide="eye" class="icon"></i><span>查看凭据</span></button><button class="btn btn-secondary btn-icon" title="请求同步" aria-label="请求同步" data-account-sync="${row.id}" ${row.enabled ? '' : 'disabled'}><i data-lucide="refresh-cw" class="icon"></i></button><button class="btn btn-secondary" data-account-toggle="${row.id}">${row.enabled ? '暂停' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除" aria-label="删除" data-account-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
   document.querySelector('#aliases-table').innerHTML = table(['子邮箱', '备注', '密钥提示', '状态', '最近收信', '操作'], filteredAliases.map((row) => `<tr><td><strong>${escapeHtml(row.address)}</strong></td><td>${escapeHtml(row.label || '-')}</td><td>末六位 ${escapeHtml(row.token_hint || '-')}${row.token_recoverable ? '' : '<br><small class="muted">旧密钥不可恢复</small>'}</td><td>${row.enabled ? '<span class="badge">已启用</span>' : '<span class="badge off">已停用</span>'}</td><td>${formatDate(row.last_received_at)}</td><td><div class="actions"><button class="btn btn-secondary btn-icon" data-alias-edit="${row.id}" title="编辑子邮箱" aria-label="编辑子邮箱"><i data-lucide="pencil" class="icon"></i></button><button class="btn btn-secondary" data-alias-secrets="${row.id}"><i data-lucide="eye" class="icon"></i><span>查看密钥</span></button><button class="btn btn-secondary" data-alias-reset="${row.id}">重置密钥</button><button class="btn btn-secondary" data-alias-toggle="${row.id}">${row.enabled ? '停用' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除子邮箱" aria-label="删除子邮箱" data-alias-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
   document.querySelector('#totp-entries-table').innerHTML = table(['平台', '账号', '密钥提示', '来源', '最近使用', '操作'], filteredTotps.map((row) => `<tr><td><strong>${escapeHtml(row.issuer || '未命名平台')}</strong></td><td>${escapeHtml(row.account_name || '-')}</td><td>末四位 ${escapeHtml(row.secret_hint || '-')}</td><td>${row.legacy_alias_address ? `由旧配置迁移<br><small class="muted">${escapeHtml(row.legacy_alias_address)}</small>` : '前端直接添加'}</td><td>${formatDate(row.last_used_at || row.created_at)}</td><td><div class="actions"><button class="btn btn-secondary btn-icon" data-totp-edit="${row.id}" title="编辑 2FA 备注" aria-label="编辑 2FA 备注"><i data-lucide="pencil" class="icon"></i></button><button class="btn btn-secondary" data-totp-secrets="${row.id}"><i data-lucide="eye" class="icon"></i><span>查看密钥与验证码</span></button><button class="btn btn-danger btn-icon" title="删除 2FA" aria-label="删除 2FA" data-totp-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
   document.querySelector('#sessions-table').innerHTML = table(['设备', '登录时间', '过期时间', '状态', '操作'], data.sessions.map((row) => `<tr><td><strong>${escapeHtml(sessionDevice(row.user_agent))}</strong></td><td>${formatDate(row.created_at)}</td><td>${formatDate(row.expires_at)}</td><td>${row.current ? '<span class="badge">当前会话</span>' : '<span class="badge off">其他会话</span>'}</td><td>${row.current ? '<span class="muted">正在使用</span>' : `<button class="btn btn-danger" data-session-revoke="${row.session_id}">退出此设备</button>`}</td></tr>`));
@@ -133,6 +181,7 @@ function showSecret(token) {
 
 function bindRowActions() {
   document.querySelectorAll('[data-account-edit]').forEach((button) => button.addEventListener('click', () => openAccountEditor(button.dataset.accountEdit)));
+  document.querySelectorAll('[data-account-secrets]').forEach((button) => button.addEventListener('click', () => openAccountSecrets(button.dataset.accountSecrets)));
   document.querySelectorAll('[data-account-sync]').forEach((button) => button.addEventListener('click', async () => {
     await api(`/api/admin/mail-account/${button.dataset.accountSync}/sync`, { method: 'POST' });
     await loadState(); toastMessage('已加入下一轮优先同步');
@@ -177,18 +226,22 @@ function bindRowActions() {
 function openAccountEditor(id) {
   const account = state.data.accounts.find((row) => String(row.id) === String(id));
   if (!account) return;
-  openModal('编辑母邮箱', `<form id="account-edit-form"><div class="form-grid"><div class="field"><label for="edit-account-email">iCloud 母邮箱</label><input id="edit-account-email" type="email" required value="${escapeHtml(account.email)}"></div><div class="field"><label for="edit-account-password">新的 App 专用密码</label><input id="edit-account-password" type="password" autocomplete="new-password" placeholder="留空表示不修改"></div><div class="field"><label for="edit-account-host">IMAP 服务器</label><input id="edit-account-host" required value="${escapeHtml(account.host)}"></div><div class="field"><label for="edit-account-port">端口</label><input id="edit-account-port" type="number" min="1" max="65535" required value="${account.port}"></div></div><p class="muted compact-note">保存前会实际测试新的 IMAP 配置。留空 App 专用密码时继续使用当前加密凭据。</p><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="save" class="icon"></i><span>测试并保存</span></button></div></form>`);
+  const provider = inferMailProvider(account);
+  openModal('编辑母邮箱', `<form id="account-edit-form"><div class="form-grid"><div class="field"><label for="edit-account-provider">邮箱服务商</label><select id="edit-account-provider">${mailProviderOptions(provider)}</select></div><div class="field"><label for="edit-account-email">母邮箱地址</label><input id="edit-account-email" type="email" required value="${escapeHtml(account.email)}"></div><div class="field"><label id="edit-account-password-label" for="edit-account-password">授权密码</label><input id="edit-account-password" type="password" autocomplete="new-password" placeholder="留空表示不修改"></div><div class="field"><label for="edit-account-imap">IMAP 服务器</label><input id="edit-account-imap" readonly></div></div><p id="edit-account-help" class="muted compact-note"></p><p class="muted compact-note">保存前会实际测试登录。密码留空时继续使用当前加密凭据；切换服务商时请填写对应的新凭据。</p><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="save" class="icon"></i><span>测试并保存</span></button></div></form>`);
   document.querySelector('[data-cancel]').addEventListener('click', closeModal);
+  document.querySelector('#edit-account-provider').addEventListener('change', (event) => {
+    updateMailProviderFields('edit-account', { keepPassword: event.currentTarget.value === provider });
+  });
+  updateMailProviderFields('edit-account', { keepPassword: true });
   document.querySelector('#account-edit-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector('[type="submit"]');
     button.disabled = true;
     try {
       await api(`/api/admin/mail-account/${id}`, { method: 'PATCH', body: JSON.stringify({
+        provider: document.querySelector('#edit-account-provider').value,
         email: document.querySelector('#edit-account-email').value,
-        appPassword: document.querySelector('#edit-account-password').value,
-        host: document.querySelector('#edit-account-host').value,
-        port: document.querySelector('#edit-account-port').value
+        appPassword: document.querySelector('#edit-account-password').value
       }) });
       closeModal(); await loadState(); toastMessage('母邮箱配置已更新');
     } catch (error) {
@@ -196,6 +249,32 @@ function openAccountEditor(id) {
       button.disabled = false;
     }
   });
+  lucide.createIcons();
+}
+
+function openAccountSecrets(id) {
+  const account = state.data.accounts.find((row) => String(row.id) === String(id));
+  if (!account) return;
+  openModal('查看邮箱凭据', `<p class="muted">请输入当前管理员登录密码，确认查看 ${escapeHtml(account.email)} 的 IMAP 授权密码。</p><form id="account-secrets-form"><div class="field"><label for="account-secrets-password">当前管理员密码</label><input id="account-secrets-password" type="password" autocomplete="current-password" required></div><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="eye" class="icon"></i><span>确认查看</span></button></div></form>`);
+  document.querySelector('[data-cancel]').addEventListener('click', closeModal);
+  document.querySelector('#account-secrets-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      renderAccountSecrets(await api(`/api/admin/mail-account/${id}/secrets`, { method: 'POST', body: JSON.stringify({ password: document.querySelector('#account-secrets-password').value }) }));
+    } catch (error) {
+      document.querySelector('#modal-error').textContent = error.message;
+      button.disabled = false;
+    }
+  });
+  lucide.createIcons();
+}
+
+function renderAccountSecrets(data) {
+  const provider = mailProviderDetails[inferMailProvider(data)];
+  openModal('邮箱凭据', `<p class="muted">${escapeHtml(provider.label)} · ${escapeHtml(data.email)} · ${escapeHtml(data.host)}:${data.port}。关闭窗口后，页面不会继续保留明文密码。</p>${secretSection(provider.passwordLabel, data.appPassword, 'copy-app-password', '授权密码为空。')}`);
+  document.querySelector('#copy-app-password').addEventListener('click', () => navigator.clipboard.writeText(data.appPassword).then(() => toastMessage('邮箱授权密码已复制')));
   lucide.createIcons();
 }
 
@@ -363,11 +442,13 @@ document.querySelector('#revoke-other-sessions').addEventListener('click', async
 });
 
 document.querySelector('#add-account').addEventListener('click', () => {
-  openModal('接入母邮箱', `<form id="account-form"><div class="form-grid"><div class="field"><label for="account-email">iCloud 母邮箱</label><input id="account-email" type="email" required placeholder="name@icloud.com"></div><div class="field"><label for="account-password">App 专用密码</label><input id="account-password" type="password" required autocomplete="new-password" placeholder="xxxx-xxxx-xxxx-xxxx"></div><div class="field"><label for="account-host">IMAP 服务器</label><input id="account-host" value="imap.mail.me.com" required></div><div class="field"><label for="account-port">端口</label><input id="account-port" type="number" value="993" min="1" max="65535" required></div></div><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="plug-zap" class="icon"></i><span>测试并保存</span></button></div></form>`);
+  openModal('接入母邮箱', `<form id="account-form"><div class="form-grid"><div class="field"><label for="account-provider">邮箱服务商</label><select id="account-provider">${mailProviderOptions()}</select></div><div class="field"><label for="account-email">母邮箱地址</label><input id="account-email" type="email" required placeholder="name@example.com"></div><div class="field"><label id="account-password-label" for="account-password">授权密码</label><input id="account-password" type="password" minlength="8" required autocomplete="new-password"></div><div class="field"><label for="account-imap">IMAP 服务器</label><input id="account-imap" readonly></div></div><p id="account-help" class="muted compact-note"></p><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="plug-zap" class="icon"></i><span>测试并保存</span></button></div></form>`);
   document.querySelector('[data-cancel]').addEventListener('click', closeModal);
+  document.querySelector('#account-provider').addEventListener('change', () => updateMailProviderFields('account'));
+  updateMailProviderFields('account');
   document.querySelector('#account-form').addEventListener('submit', async (event) => {
     event.preventDefault(); const button = event.currentTarget.querySelector('[type="submit"]'); button.disabled = true;
-    try { await api('/api/admin/mail-account', { method: 'POST', body: JSON.stringify({ email: document.querySelector('#account-email').value, appPassword: document.querySelector('#account-password').value, host: document.querySelector('#account-host').value, port: document.querySelector('#account-port').value }) }); closeModal(); await loadState(); toastMessage('母邮箱已接入'); }
+    try { await api('/api/admin/mail-account', { method: 'POST', body: JSON.stringify({ provider: document.querySelector('#account-provider').value, email: document.querySelector('#account-email').value, appPassword: document.querySelector('#account-password').value }) }); closeModal(); await loadState(); toastMessage('母邮箱已接入'); }
     catch (error) { document.querySelector('#modal-error').textContent = error.message; button.disabled = false; }
   });
   lucide.createIcons();
