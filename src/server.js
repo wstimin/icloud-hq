@@ -78,8 +78,7 @@ function rateLimit(key, max, windowMs) {
 async function findPublicAlias(token) {
   if (token.length < 20 || token.length > 200) return null;
   const result = await pool.query(
-    `SELECT id, address, label, totp_secret_encrypted, totp_issuer, totp_account_name
-     FROM aliases
+    `SELECT id, address, label FROM aliases
      WHERE token_digest = $1 AND enabled = TRUE
        AND (token_expires_at IS NULL OR token_expires_at > NOW())`,
     [digest(token)]
@@ -87,13 +86,33 @@ async function findPublicAlias(token) {
   return result.rows[0] || null;
 }
 
-function aliasTotpResponse(alias) {
-  if (!alias.totp_secret_encrypted) return null;
+function totpEntryResponse(entry, secret) {
   return {
-    ...generateTotp(decrypt(alias.totp_secret_encrypted)),
-    issuer: alias.totp_issuer || '',
-    accountName: alias.totp_account_name || ''
+    id: entry.id,
+    ...generateTotp(secret),
+    issuer: entry.issuer || '',
+    accountName: entry.account_name || '',
+    secretHint: secret.slice(-4)
   };
+}
+
+async function saveStandaloneTotp(input, issuerInput = '', accountNameInput = '') {
+  const parsed = parseTotpInput(input);
+  generateTotp(parsed.secret);
+  const issuer = parsed.issuer || String(issuerInput || '').trim().slice(0, 120);
+  const accountName = parsed.accountName || String(accountNameInput || '').trim().slice(0, 160);
+  const result = await pool.query(
+    `INSERT INTO totp_entries(
+       secret_encrypted, secret_fingerprint, secret_hint, issuer, account_name, last_used_at
+     ) VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (secret_fingerprint) DO UPDATE SET
+       issuer = CASE WHEN EXCLUDED.issuer = '' THEN totp_entries.issuer ELSE EXCLUDED.issuer END,
+       account_name = CASE WHEN EXCLUDED.account_name = '' THEN totp_entries.account_name ELSE EXCLUDED.account_name END,
+       last_used_at = NOW(), updated_at = NOW()
+     RETURNING id, issuer, account_name`,
+    [encrypt(parsed.secret), digest(`totp:${parsed.secret}`), parsed.secret.slice(-4), issuer, accountName]
+  );
+  return { entry: result.rows[0], secret: parsed.secret };
 }
 
 function adminNetwork(req, res, next) {
@@ -252,45 +271,20 @@ app.post('/api/query', async (req, res, next) => {
 app.post('/api/query/totp', async (req, res, next) => {
   noStore(res);
   const ip = extractClientIp(req);
-  const limit = rateLimit(`query-totp-code:${ip}`, 300, 10 * 60 * 1000);
+  const limit = rateLimit(`query-totp-code:${ip}`, 60, 10 * 60 * 1000);
   if (!limit.allowed) return res.status(429).json({ error: '2FA 查询过于频繁，请稍后再试' });
   try {
-    const token = String(req.body.token || '').trim();
-    const alias = await findPublicAlias(token);
-    if (!alias) {
-      await audit({ actor: 'public', action: 'alias_totp_query_failed', ip, detail: 'unknown token' });
-      return res.status(401).json({ error: '查询密钥无效或已失效' });
+    const requested = Array.isArray(req.body.entries)
+      ? req.body.entries.slice(0, 50)
+      : [{ secret: req.body.secret, issuer: req.body.issuer, accountName: req.body.accountName }];
+    if (!requested.length) return res.status(400).json({ error: '请输入至少一个 2FA 密钥' });
+    const converted = [];
+    for (const item of requested) {
+      const saved = await saveStandaloneTotp(item.secret, item.issuer, item.accountName);
+      converted.push(totpEntryResponse(saved.entry, saved.secret));
     }
-    res.json({ alias: maskEmail(alias.address), label: alias.label, totp: aliasTotpResponse(alias) });
-  } catch (error) { next(error); }
-});
-
-app.put('/api/query/totp', async (req, res, next) => {
-  noStore(res);
-  const ip = extractClientIp(req);
-  const limit = rateLimit(`query-totp-save:${ip}`, 10, 10 * 60 * 1000);
-  if (!limit.allowed) return res.status(429).json({ error: '2FA 绑定操作过于频繁，请稍后再试' });
-  try {
-    const token = String(req.body.token || '').trim();
-    const alias = await findPublicAlias(token);
-    if (!alias) {
-      await audit({ actor: 'public', action: 'alias_totp_save_failed', ip, detail: 'unknown token' });
-      return res.status(401).json({ error: '查询密钥无效或已失效' });
-    }
-    const parsed = parseTotpInput(req.body.secret);
-    const generated = generateTotp(parsed.secret);
-    await pool.query(
-      `UPDATE aliases SET totp_secret_encrypted = $1, totp_issuer = $2,
-       totp_account_name = $3, updated_at = NOW() WHERE id = $4`,
-      [encrypt(parsed.secret), parsed.issuer, parsed.accountName, alias.id]
-    );
-    await audit({ actor: `alias:${alias.id}`, action: 'alias_totp_saved_public', target: String(alias.id), ip });
-    res.json({
-      ok: true,
-      alias: maskEmail(alias.address),
-      label: alias.label,
-      totp: { ...generated, issuer: parsed.issuer, accountName: parsed.accountName }
-    });
+    await audit({ actor: 'public', action: 'totp_converted', target: converted.map((item) => item.id).join(','), ip });
+    res.json({ totps: converted });
   } catch (error) {
     if (/TOTP|HOTP|2FA|Base32|otpauth/.test(error.message || '')) return res.status(400).json({ error: error.message });
     next(error);
@@ -349,13 +343,14 @@ app.post('/api/admin/login/totp', adminNetwork, async (req, res, next) => {
 
 app.get('/api/admin/state', ...adminApi(async (req, res) => {
   noStore(res);
-  const [accounts, aliases, recent, unmatched, auditResult] = await Promise.all([
+  const [accounts, aliases, totpEntries, recent, unmatched, auditResult] = await Promise.all([
     pool.query(`SELECT id, email, host, port, secure, enabled, status, last_error, last_synced_at, created_at FROM mail_accounts ORDER BY id`),
     pool.query(`SELECT a.id, a.mail_account_id, a.address, a.label, a.enabled, a.token_hint, a.token_expires_at, a.created_at,
       (a.token_encrypted IS NOT NULL) AS token_recoverable,
-      (a.totp_secret_encrypted IS NOT NULL) AS totp_enabled, a.totp_issuer, a.totp_account_name,
       (SELECT received_at FROM verification_messages v WHERE v.alias_id = a.id ORDER BY received_at DESC LIMIT 1) AS last_received_at
       FROM aliases a ORDER BY a.id DESC`),
+    pool.query(`SELECT id, secret_hint, issuer, account_name, legacy_alias_address, last_used_at, created_at
+      FROM totp_entries ORDER BY id DESC`),
     pool.query(`SELECT v.id, v.alias_id, a.address, v.sender, v.subject, v.code_masked, v.confidence, v.received_at, v.expires_at
       FROM verification_messages v LEFT JOIN aliases a ON a.id = v.alias_id ORDER BY v.received_at DESC LIMIT 50`),
     pool.query(`SELECT id, sender, subject, recipient_headers, received_at FROM unmatched_messages ORDER BY received_at DESC LIMIT 30`),
@@ -366,6 +361,7 @@ app.get('/api/admin/state', ...adminApi(async (req, res) => {
     admin: { email: req.admin.email, totpEnabled: Boolean(req.admin.totp_secret_encrypted) },
     accounts: accounts.rows,
     aliases: aliases.rows,
+    totpEntries: totpEntries.rows,
     recent: recent.rows,
     unmatched: unmatched.rows,
     audit: auditResult.rows
@@ -459,53 +455,51 @@ app.post('/api/admin/aliases/:id/secrets', ...adminApi(async (req, res) => {
   }
 
   const result = await pool.query(
-    `SELECT address, token_encrypted, totp_secret_encrypted, totp_issuer, totp_account_name
-     FROM aliases WHERE id = $1`,
+    `SELECT address, token_encrypted FROM aliases WHERE id = $1`,
     [req.params.id]
   );
   if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
   const alias = result.rows[0];
-  const totpSecret = decrypt(alias.totp_secret_encrypted);
   await audit({ actor: `user:${req.admin.id}`, action: 'alias_secrets_revealed', target: alias.address, ip });
   res.json({
     address: alias.address,
     queryToken: decrypt(alias.token_encrypted),
-    queryTokenRecoverable: Boolean(alias.token_encrypted),
-    totp: totpSecret ? {
-      secret: totpSecret,
-      ...generateTotp(totpSecret),
-      issuer: alias.totp_issuer || '',
-      accountName: alias.totp_account_name || ''
-    } : null
+    queryTokenRecoverable: Boolean(alias.token_encrypted)
   });
 }));
 
-app.put('/api/admin/aliases/:id/totp', ...adminApi(async (req, res) => {
-  let parsed;
-  try {
-    parsed = parseTotpInput(req.body.secret);
-    generateTotp(parsed.secret);
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-  const result = await pool.query(
-    `UPDATE aliases SET totp_secret_encrypted = $1, totp_issuer = $2,
-     totp_account_name = $3, updated_at = NOW() WHERE id = $4 RETURNING address`,
-    [encrypt(parsed.secret), parsed.issuer, parsed.accountName, req.params.id]
-  );
-  if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
-  await audit({ actor: `user:${req.admin.id}`, action: 'alias_totp_saved', target: result.rows[0].address, ip: extractClientIp(req) });
-  res.json({ ok: true });
-}));
+app.post('/api/admin/totp-entries/:id/secrets', ...adminApi(async (req, res) => {
+  noStore(res);
+  const ip = extractClientIp(req);
+  const limit = rateLimit(`admin-totp-secret:${req.admin.id}:${ip}`, 10, 15 * 60 * 1000);
+  if (!limit.allowed) return res.status(429).json({ error: '敏感信息查看过于频繁，请稍后再试' });
 
-app.delete('/api/admin/aliases/:id/totp', ...adminApi(async (req, res) => {
+  const passwordResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.admin.id]);
+  if (!passwordResult.rowCount || !(await verifyPassword(String(req.body.password || ''), passwordResult.rows[0].password_hash))) {
+    await audit({ actor: `user:${req.admin.id}`, action: 'totp_secret_reveal_failed', target: String(req.params.id), ip });
+    return res.status(403).json({ error: '当前管理员密码不正确' });
+  }
+
   const result = await pool.query(
-    `UPDATE aliases SET totp_secret_encrypted = NULL, totp_issuer = '',
-     totp_account_name = '', updated_at = NOW() WHERE id = $1 RETURNING address`,
+    `SELECT id, secret_encrypted, issuer, account_name, legacy_alias_address
+     FROM totp_entries WHERE id = $1`,
     [req.params.id]
   );
-  if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
-  await audit({ actor: `user:${req.admin.id}`, action: 'alias_totp_deleted', target: result.rows[0].address, ip: extractClientIp(req) });
+  if (!result.rowCount) return res.status(404).json({ error: '2FA 记录不存在' });
+  const entry = result.rows[0];
+  const secret = decrypt(entry.secret_encrypted);
+  await audit({ actor: `user:${req.admin.id}`, action: 'totp_secret_revealed', target: String(entry.id), ip });
+  res.json({
+    ...totpEntryResponse(entry, secret),
+    secret,
+    legacyAliasAddress: entry.legacy_alias_address || ''
+  });
+}));
+
+app.delete('/api/admin/totp-entries/:id', ...adminApi(async (req, res) => {
+  const result = await pool.query('DELETE FROM totp_entries WHERE id = $1 RETURNING id', [req.params.id]);
+  if (!result.rowCount) return res.status(404).json({ error: '2FA 记录不存在' });
+  await audit({ actor: `user:${req.admin.id}`, action: 'totp_entry_deleted', target: String(result.rows[0].id), ip: extractClientIp(req) });
   res.json({ ok: true });
 }));
 

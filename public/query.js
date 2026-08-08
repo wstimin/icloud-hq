@@ -5,15 +5,14 @@ const mailTokenInput = document.querySelector('#mail-token');
 const mailErrorBox = document.querySelector('#mail-query-error');
 const mailResultBox = document.querySelector('#mail-result');
 const totpForm = document.querySelector('#totp-query-form');
-const totpTokenInput = document.querySelector('#totp-token');
+const totpSecretInput = document.querySelector('#totp-secret');
 const totpErrorBox = document.querySelector('#totp-query-error');
 const totpResultBox = document.querySelector('#totp-result');
 const toast = document.querySelector('#toast');
+const activeTotps = new Map();
 let mailCountdownTimer;
 let totpCountdownTimer;
 let totpRefreshInFlight = false;
-let totpDeadline = 0;
-let currentTotp = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -30,11 +29,11 @@ async function copyCode(code, message) {
   showToast(message);
 }
 
-async function request(url, token, options = {}) {
+async function request(url, body) {
   const response = await fetch(url, {
-    method: options.method || 'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, ...(options.body || {}) }),
+    body: JSON.stringify(body),
     cache: 'no-store'
   });
   const data = await response.json();
@@ -65,71 +64,72 @@ function renderMail(data) {
   mailCountdownTimer = setInterval(update, 1000);
 }
 
-function renderTotp(data) {
-  clearInterval(totpCountdownTimer);
-  currentTotp = data.totp;
-  totpResultBox.classList.remove('hidden');
-  totpResultBox.innerHTML = `${renderAliasMeta(data)}${data.totp ? `
-    <div class="code-line"><span id="totp-code-value" class="code-value">${escapeHtml(data.totp.code)}</span><button id="copy-totp-code" class="btn btn-secondary btn-icon" title="复制 2FA 验证码" aria-label="复制 2FA 验证码"><i data-lucide="copy" class="icon"></i></button></div>
-    <div class="result-detail"><span>${escapeHtml(data.totp.issuer || '第三方平台')}${data.totp.accountName ? ` · ${escapeHtml(data.totp.accountName)}` : ''}</span><span id="totp-expires"></span></div>` : '<p class="muted result-empty">这个子邮箱尚未绑定第三方平台 2FA。</p>'}
-    <section class="totp-manage">
-      <button id="toggle-totp-form" class="btn btn-secondary" type="button"><i data-lucide="shield-keyhole" class="icon"></i><span>${data.totp ? '更换 2FA' : '绑定 2FA'}</span></button>
-      <form id="public-totp-form" class="totp-form hidden">
-        <div class="field"><label for="public-totp-secret">2FA 手动密钥或 otpauth 地址</label><textarea id="public-totp-secret" rows="4" maxlength="4096" required autocomplete="off" spellcheck="false" placeholder="JBSWY3DPEHPK3PXP 或 otpauth://totp/..."></textarea></div>
-        <p class="muted compact-note">保存后不会再次显示原始密钥。${data.totp ? '本次操作会覆盖前后台当前使用的 2FA。' : '绑定后管理后台会同步显示。'}</p>
-        <p id="totp-form-error" class="message" role="alert"></p>
-        <div class="form-actions"><button class="btn btn-primary" type="submit"><i data-lucide="save" class="icon"></i><span>保存 2FA</span></button></div>
-      </form>
-    </section>`;
+function totpTitle(item) {
+  const names = [item.data.issuer, item.data.accountName].filter(Boolean);
+  return names.length ? names.join(' · ') : `2FA 密钥末四位 ${item.data.secretHint}`;
+}
+
+function renderTotps() {
+  const entries = [...activeTotps.values()];
+  totpResultBox.classList.toggle('hidden', !entries.length);
+  if (!entries.length) {
+    clearInterval(totpCountdownTimer);
+    return;
+  }
+  totpResultBox.innerHTML = `<div class="result-meta"><strong>当前会话中的 2FA</strong><span>${entries.length} 条独立密钥</span></div><div class="totp-entry-list">${entries.map((item) => `
+    <section class="totp-entry" data-totp-entry="${item.data.id}">
+      <div class="totp-entry-head"><div><h2>${escapeHtml(totpTitle(item))}</h2><p>密钥末四位 ${escapeHtml(item.data.secretHint)}</p></div><button class="btn btn-danger btn-icon" type="button" data-remove-totp="${item.data.id}" title="从当前页面移除" aria-label="从当前页面移除"><i data-lucide="x" class="icon"></i></button></div>
+      <div class="code-line"><span class="code-value">${escapeHtml(item.data.code)}</span><button class="btn btn-secondary btn-icon" type="button" data-copy-totp="${item.data.id}" title="复制 2FA 验证码" aria-label="复制 2FA 验证码"><i data-lucide="copy" class="icon"></i></button></div>
+      <div class="result-detail"><span data-totp-remaining="${item.data.id}">${item.data.remaining} 秒后自动刷新</span></div>
+    </section>`).join('')}</div>`;
+  document.querySelectorAll('[data-copy-totp]').forEach((button) => button.addEventListener('click', () => {
+    copyCode(activeTotps.get(button.dataset.copyTotp).data.code, '2FA 验证码已复制');
+  }));
+  document.querySelectorAll('[data-remove-totp]').forEach((button) => button.addEventListener('click', () => {
+    activeTotps.delete(button.dataset.removeTotp);
+    renderTotps();
+  }));
   lucide.createIcons();
-  if (data.totp) document.querySelector('#copy-totp-code').addEventListener('click', () => copyCode(currentTotp.code, '2FA 验证码已复制'));
-  document.querySelector('#toggle-totp-form').addEventListener('click', () => document.querySelector('#public-totp-form').classList.toggle('hidden'));
-  document.querySelector('#public-totp-form').addEventListener('submit', saveTotp);
-  if (!data.totp) return;
-  totpDeadline = Date.now() + (data.totp.remaining * 1000);
+  startTotpCountdown();
+}
+
+function startTotpCountdown() {
+  clearInterval(totpCountdownTimer);
   const update = () => {
-    const seconds = Math.max(0, Math.ceil((totpDeadline - Date.now()) / 1000));
-    document.querySelector('#totp-expires').textContent = seconds > 0 ? `${seconds} 秒后自动刷新` : '正在同步最新动态码';
-    if (!seconds) refreshTotp();
+    let shouldRefresh = false;
+    for (const item of activeTotps.values()) {
+      const elapsed = Math.floor((Date.now() - item.receivedAt) / 1000);
+      const remaining = Math.max(0, item.data.remaining - elapsed);
+      const label = document.querySelector(`[data-totp-remaining="${item.data.id}"]`);
+      if (label) label.textContent = remaining ? `${remaining} 秒后自动刷新` : '正在生成最新动态码';
+      if (!remaining) shouldRefresh = true;
+    }
+    if (shouldRefresh) refreshTotps();
   };
   update();
   totpCountdownTimer = setInterval(update, 1000);
 }
 
-async function queryTotp() {
-  return request('/api/query/totp', totpTokenInput.value.trim());
+async function convertTotps(entries) {
+  return request('/api/query/totp', { entries });
 }
 
-async function refreshTotp() {
-  if (totpRefreshInFlight) return;
+async function refreshTotps() {
+  if (totpRefreshInFlight || !activeTotps.size) return;
   totpRefreshInFlight = true;
   try {
-    renderTotp(await queryTotp());
+    const current = [...activeTotps.values()];
+    const response = await convertTotps(current.map((item) => ({ secret: item.secret })));
+    for (const data of response.totps) {
+      const existing = current.find((item) => item.data.id === data.id);
+      if (existing) activeTotps.set(String(data.id), { secret: existing.secret, data, receivedAt: Date.now() });
+    }
+    renderTotps();
   } catch (error) {
     clearInterval(totpCountdownTimer);
     totpErrorBox.textContent = error.message;
   } finally {
     totpRefreshInFlight = false;
-  }
-}
-
-async function saveTotp(event) {
-  event.preventDefault();
-  const button = event.currentTarget.querySelector('[type="submit"]');
-  const errorBox = document.querySelector('#totp-form-error');
-  const replacing = Boolean(currentTotp);
-  button.disabled = true;
-  errorBox.textContent = '';
-  try {
-    const data = await request('/api/query/totp', totpTokenInput.value.trim(), {
-      method: 'PUT',
-      body: { secret: document.querySelector('#public-totp-secret').value.trim() }
-    });
-    showToast(replacing ? '2FA 已更换，后台已同步' : '2FA 已绑定，后台已同步');
-    renderTotp(data);
-  } catch (error) {
-    errorBox.textContent = error.message;
-    button.disabled = false;
   }
 }
 
@@ -154,7 +154,7 @@ mailForm.addEventListener('submit', async (event) => {
   const button = mailForm.querySelector('[type="submit"]');
   button.disabled = true;
   try {
-    renderMail(await request('/api/query', mailTokenInput.value.trim()));
+    renderMail(await request('/api/query', { token: mailTokenInput.value.trim() }));
   } catch (error) {
     mailErrorBox.textContent = error.message;
   } finally {
@@ -165,11 +165,16 @@ mailForm.addEventListener('submit', async (event) => {
 totpForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   totpErrorBox.textContent = '';
-  totpResultBox.classList.add('hidden');
   const button = totpForm.querySelector('[type="submit"]');
+  const secret = totpSecretInput.value.trim();
   button.disabled = true;
   try {
-    renderTotp(await queryTotp());
+    const response = await convertTotps([{ secret, issuer: document.querySelector('#totp-issuer').value, accountName: document.querySelector('#totp-account-name').value }]);
+    const data = response.totps[0];
+    activeTotps.set(String(data.id), { secret, data, receivedAt: Date.now() });
+    totpForm.reset();
+    renderTotps();
+    showToast('2FA 已转换并同步到管理后台');
   } catch (error) {
     totpErrorBox.textContent = error.message;
   } finally {

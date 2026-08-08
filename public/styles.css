@@ -101,6 +101,13 @@ a { color: inherit; }
 .result-empty { margin: 20px 0 0; }
 .totp-manage { padding-top: 20px; }
 .totp-form { margin-top: 18px; }
+.totp-meta-fields { margin-top: 14px; }
+.totp-entry-list { display: grid; gap: 0; }
+.totp-entry { padding: 22px 0; border-bottom: 1px solid var(--line); }
+.totp-entry:last-child { border-bottom: 0; padding-bottom: 0; }
+.totp-entry-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.totp-entry-head h2 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.totp-entry-head p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
 .compact-note { margin: 10px 0 0; font-size: 12px; line-height: 1.6; }
 .public-foot { padding: 22px 0; color: var(--muted); font-size: 12px; border-top: 1px solid rgba(102,115,125,.2); }
 

@@ -64,6 +64,21 @@ ALTER TABLE aliases ADD COLUMN IF NOT EXISTS totp_issuer TEXT NOT NULL DEFAULT '
 ALTER TABLE aliases ADD COLUMN IF NOT EXISTS totp_account_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE aliases ADD COLUMN IF NOT EXISTS token_encrypted TEXT;
 
+CREATE TABLE IF NOT EXISTS totp_entries (
+  id BIGSERIAL PRIMARY KEY,
+  secret_encrypted TEXT NOT NULL,
+  secret_fingerprint TEXT NOT NULL UNIQUE,
+  secret_hint TEXT NOT NULL DEFAULT '',
+  issuer TEXT NOT NULL DEFAULT '',
+  account_name TEXT NOT NULL DEFAULT '',
+  legacy_alias_address TEXT NOT NULL DEFAULT '',
+  last_used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS totp_entries_created_idx ON totp_entries(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS verification_messages (
   id BIGSERIAL PRIMARY KEY,
   mail_account_id BIGINT NOT NULL REFERENCES mail_accounts(id) ON DELETE CASCADE,

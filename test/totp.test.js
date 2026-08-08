@@ -33,13 +33,13 @@ test('generates the RFC 6238 compatible six digit token and timing metadata', ()
 
 test('public and routine admin responses never expose a stored TOTP secret', () => {
   const server = require('node:fs').readFileSync('src/server.js', 'utf8');
-  const publicRoutes = server.slice(server.indexOf("app.post('/api/query'"), server.indexOf("app.post('/api/admin/login'"));
+  const publicTotpRoute = server.slice(server.indexOf("app.post('/api/query/totp'"), server.indexOf("app.post('/api/admin/login'"));
   const stateRoute = server.slice(server.indexOf("app.get('/api/admin/state'"), server.indexOf("app.post('/api/admin/mail-account'"));
-  assert.match(server, /res\.json\(\{ alias: maskEmail\(alias\.address\), label: alias\.label, totp: aliasTotpResponse\(alias\) \}\)/);
-  assert.match(server, /totp_secret_encrypted IS NOT NULL\) AS totp_enabled/);
-  assert.doesNotMatch(publicRoutes, /secret:\s*(?:parsed|totpSecret)/);
+  assert.match(server, /res\.json\(\{ totps: converted \}\)/);
+  assert.doesNotMatch(publicTotpRoute, /secret_encrypted|decrypt\(|secret:\s*(?:saved|parsed|entry)/);
   assert.match(stateRoute, /token_encrypted IS NOT NULL\) AS token_recoverable/);
-  assert.doesNotMatch(stateRoute, /a\.token_encrypted\s*,|decrypt\(|secret:/);
+  assert.match(stateRoute, /SELECT id, secret_hint, issuer, account_name, legacy_alias_address/);
+  assert.doesNotMatch(stateRoute, /a\.token_encrypted\s*,|SELECT id, secret_encrypted|decrypt\(|totpEntries:[^\n]*secret/);
 });
 
 test('administrator secret reveal requires password confirmation and is audited', () => {
@@ -47,25 +47,38 @@ test('administrator secret reveal requires password confirmation and is audited'
   const server = fs.readFileSync('src/server.js', 'utf8');
   const schema = fs.readFileSync('src/schema.sql', 'utf8');
   const admin = fs.readFileSync('public/admin.js', 'utf8');
-  const route = server.slice(server.indexOf("app.post('/api/admin/aliases/:id/secrets'"), server.indexOf("app.put('/api/admin/aliases/:id/totp'"));
+  const aliasRoute = server.slice(server.indexOf("app.post('/api/admin/aliases/:id/secrets'"), server.indexOf("app.post('/api/admin/totp-entries/:id/secrets'"));
+  const totpRoute = server.slice(server.indexOf("app.post('/api/admin/totp-entries/:id/secrets'"), server.indexOf("app.delete('/api/admin/totp-entries/:id'"));
   assert.match(schema, /token_encrypted TEXT/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS totp_entries/);
   assert.match(server, /INSERT INTO aliases\(mail_account_id, address, label, token_digest, token_encrypted/);
   assert.match(server, /\[accountId, address, label, digest\(token\), encrypt\(token\)/);
   assert.match(server, /token_digest = \$1, token_encrypted = \$2/);
-  assert.match(route, /verifyPassword\(password/);
-  assert.match(route, /alias_secrets_revealed/);
-  assert.match(route, /queryToken: decrypt\(alias\.token_encrypted\)/);
-  assert.match(route, /secret: totpSecret/);
+  assert.match(aliasRoute, /verifyPassword\(password/);
+  assert.match(aliasRoute, /alias_secrets_revealed/);
+  assert.match(aliasRoute, /queryToken: decrypt\(alias\.token_encrypted\)/);
+  assert.match(totpRoute, /verifyPassword/);
+  assert.match(totpRoute, /totp_secret_revealed/);
+  assert.match(totpRoute, /secret = decrypt\(entry\.secret_encrypted\)/);
   assert.match(admin, /data-alias-secrets/);
+  assert.match(admin, /data-totp-secrets/);
   assert.match(admin, /当前管理员密码/);
 });
 
-test('mail and TOTP queries use separate public responses', () => {
-  const server = require('node:fs').readFileSync('src/server.js', 'utf8');
+test('standalone TOTP storage is independent from mail aliases', () => {
+  const fs = require('node:fs');
+  const server = fs.readFileSync('src/server.js', 'utf8');
+  const schema = fs.readFileSync('src/schema.sql', 'utf8');
   const mailRoute = server.slice(server.indexOf("app.post('/api/query'"), server.indexOf("app.post('/api/query/totp'"));
-  const totpRoute = server.slice(server.indexOf("app.post('/api/query/totp'"), server.indexOf("app.put('/api/query/totp'"));
-  assert.doesNotMatch(mailRoute, /aliasTotpResponse/);
+  const totpRoute = server.slice(server.indexOf("app.post('/api/query/totp'"), server.indexOf("app.post('/api/admin/login'"));
+  const table = schema.slice(schema.indexOf('CREATE TABLE IF NOT EXISTS totp_entries'), schema.indexOf('CREATE TABLE IF NOT EXISTS verification_messages'));
+  assert.doesNotMatch(table, /alias_id|REFERENCES aliases/);
+  assert.doesNotMatch(mailRoute, /saveStandaloneTotp|totp_entries/);
   assert.doesNotMatch(totpRoute, /verification_messages|code_encrypted/);
+  assert.doesNotMatch(totpRoute, /findPublicAlias|req\.body\.token/);
+  assert.match(totpRoute, /req\.body\.entries/);
+  assert.match(totpRoute, /req\.body\.secret/);
+  assert.match(server, /ON CONFLICT \(secret_fingerprint\) DO UPDATE/);
 });
 
 test('public page keeps mail and TOTP in separate tabs and forms', () => {
@@ -76,6 +89,9 @@ test('public page keeps mail and TOTP in separate tabs and forms', () => {
   assert.match(html, /data-query-tab="totp"/);
   assert.match(html, /id="mail-query-form"/);
   assert.match(html, /id="totp-query-form"/);
-  assert.match(script, /request\('\/api\/query', mailTokenInput/);
-  assert.match(script, /request\('\/api\/query\/totp', totpTokenInput/);
+  assert.match(html, /id="totp-secret"/);
+  assert.doesNotMatch(html, /id="totp-token"/);
+  assert.match(script, /request\('\/api\/query', \{ token: mailTokenInput/);
+  assert.match(script, /request\('\/api\/query\/totp', \{ entries \}\)/);
+  assert.match(script, /const activeTotps = new Map\(\)/);
 });

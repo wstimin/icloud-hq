@@ -21,6 +21,25 @@ const tokenPepper = requiredHex('TOKEN_PEPPER_HEX');
 async function initDatabase() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   await pool.query(schema);
+  const legacy = await pool.query(
+    `SELECT id, address, totp_secret_encrypted, totp_issuer, totp_account_name
+     FROM aliases WHERE totp_secret_encrypted IS NOT NULL`
+  );
+  for (const alias of legacy.rows) {
+    const secret = decrypt(alias.totp_secret_encrypted);
+    await pool.query(
+      `INSERT INTO totp_entries(
+         secret_encrypted, secret_fingerprint, secret_hint, issuer, account_name, legacy_alias_address
+       ) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (secret_fingerprint) DO NOTHING`,
+      [alias.totp_secret_encrypted, digest(`totp:${secret}`), secret.slice(-4), alias.totp_issuer, alias.totp_account_name, alias.address]
+    );
+    await pool.query(
+      `UPDATE aliases SET totp_secret_encrypted = NULL, totp_issuer = '',
+       totp_account_name = '', updated_at = NOW() WHERE id = $1`,
+      [alias.id]
+    );
+  }
 }
 
 function randomToken(bytes = 24) {

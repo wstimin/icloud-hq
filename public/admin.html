@@ -15,6 +15,7 @@
         <button class="active" data-section="overview" title="概览"><i data-lucide="layout-dashboard" class="icon"></i><span>概览</span></button>
         <button data-section="mailboxes" title="母邮箱"><i data-lucide="inbox" class="icon"></i><span>母邮箱</span></button>
         <button data-section="aliases" title="子邮箱"><i data-lucide="at-sign" class="icon"></i><span>子邮箱</span></button>
+        <button data-section="totp-entries" title="2FA 管理"><i data-lucide="shield-keyhole" class="icon"></i><span>2FA 管理</span></button>
         <button data-section="messages" title="收信记录"><i data-lucide="mails" class="icon"></i><span>收信记录</span></button>
         <button data-section="security" title="安全"><i data-lucide="key-round" class="icon"></i><span>安全</span></button>
       </nav>
@@ -34,8 +35,12 @@
           <div class="panel"><div id="accounts-table" class="table-wrap"></div></div>
         </section>
         <section id="aliases" class="section">
-          <div class="section-head"><div><h2>子邮箱</h2><p>管理查询密钥，以及各子邮箱绑定的第三方平台 2FA。</p></div><button id="add-alias" class="btn btn-primary"><i data-lucide="plus" class="icon"></i><span>添加子邮箱</span></button></div>
+          <div class="section-head"><div><h2>子邮箱</h2><p>管理用于查询邮箱验证码的子邮箱和独立查询密钥。</p></div><button id="add-alias" class="btn btn-primary"><i data-lucide="plus" class="icon"></i><span>添加子邮箱</span></button></div>
           <div class="panel"><div id="aliases-table" class="table-wrap"></div></div>
+        </section>
+        <section id="totp-entries" class="section">
+          <div class="section-head"><div><h2>2FA 管理</h2><p>查看和管理前端直接转换保存的独立 TOTP 密钥，与邮箱和子邮箱无关联。</p></div></div>
+          <div class="panel"><div id="totp-entries-table" class="table-wrap"></div></div>
         </section>
         <section id="messages" class="section">
           <div class="section-head"><div><h2>收信记录</h2><p>只保留必要元数据和短期加密验证码，不保存邮件正文。</p></div></div>
