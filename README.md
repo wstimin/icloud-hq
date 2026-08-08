@@ -14,13 +14,17 @@
 - 前台可直接转换并保存多个 2FA 密钥，同时显示各自的 6 位动态码和刷新倒计时
 - iCloud IMAP App 专用密码连接测试与加密保存
 - 多母邮箱、多子邮箱管理
+- 母邮箱、子邮箱地址与备注、查询密钥有效期、2FA 平台与账号备注均可编辑
+- 子邮箱搜索、批量导入和非敏感配置导出
 - 每个子邮箱独立高强度查询密钥，数据库保存用于验证的 HMAC 摘要和管理员查看所需的 AES-256-GCM 加密副本
 - 管理员重新输入当前登录密码后，可按需查看查询密钥、2FA 手动密钥和当前动态码
+- 管理端运行指标、Worker 心跳、登录会话查看与其他设备退出
 - 常驻 IMAP Worker、断线恢复、UID 游标与 Message-ID 去重
 - 按原始邮件头识别 `To`、`Delivered-To`、`X-Original-To` 等位置中的子邮箱
 - 中文和英文验证码提取、短期加密保存及自动清理
 - 查询 IP 限流、管理员审计、未匹配邮件检查
-- PostgreSQL 持久化、Caddy 自动 HTTPS、Docker Compose 一键运行
+- PostgreSQL 持久化、自动备份与保留策略、Caddy 自动 HTTPS、Docker Compose 一键运行
+- Docker 日志轮转、更新前备份、健康检查和失败回滚
 
 ## 服务器要求
 
@@ -44,7 +48,7 @@ sudo sh /tmp/icloud-hq-deploy.sh
 
 脚本会自动安装 Docker、下载生产配置并拉取 GitHub Container Registry 中的最新镜像。首次运行时会询问域名、证书邮箱、管理员邮箱和初始管理员密码，并自动生成数据库密码、主加密密钥和查询密钥 Pepper。为避免 `.env` 解析歧义，初始密码只允许字母、数字、点、下划线、波浪号和连字符；部署后可在管理后台修改。配置保存在 `/opt/icloud-hq/.env`，权限为 `600`。
 
-以后再次运行同一条命令即可更新到最新 `latest` 镜像。脚本会保留 `.env`、PostgreSQL 数据和 Caddy 证书，不会重新初始化管理员。
+以后再次运行同一条命令即可更新到最新 `latest` 镜像。脚本会保留 `.env`、PostgreSQL 数据和 Caddy 证书，不会重新初始化管理员。升级前会创建数据库备份；新版本健康检查失败时，会尝试恢复更新前的应用镜像。旧 `.env` 不需要手工补齐新增变量，Compose 和应用会使用文档中的默认值。
 
 首次启动时，Web 容器会自动建立数据库表并创建一个管理员。然后访问：
 
@@ -75,19 +79,21 @@ sudo sh /tmp/icloud-hq-deploy.sh
 
 管理员后台之后只能看到密钥末六位。密钥丢失时应点击“重置密钥”，旧密钥会立即失效。
 
+子邮箱列表支持搜索、批量导入和配置导出。批量导入格式为每行 `子邮箱,备注`，新生成的查询密钥会在导入结果中显示并可下载；导出文件不包含查询密钥。编辑子邮箱时可以修改所属母邮箱、地址、备注和密钥有效期，现有查询密钥不会被重置。
+
 ## 独立第三方平台 2FA
 
 这里的 2FA 是第三方平台在注册或开启双重认证时提供的 TOTP 配置，不是 Apple 受信任设备或手机号收到的验证码，也不是管理员登录后台使用的 TOTP。它与 iCloud 母邮箱、子邮箱和 `cv_` 查询密钥完全独立。
 
 1. 在第三方平台开启身份验证器 2FA，找到 Base32“手动设置密钥”，或复制完整的 `otpauth://totp/...` 地址。
-2. 打开公开首页的“2FA 验证码”页签，直接粘贴手动密钥或 `otpauth://` 地址；平台名称和账号备注可以选填。
+2. 打开公开首页的“2FA 验证码”页签，直接粘贴手动密钥或 `otpauth://` 地址；平台名称和账号备注可以选填。支持的浏览器也可以选择二维码图片在本机识别，图片不会上传服务器。
 3. 点击“转换并保存 2FA”后，当前 6 位动态码会立即显示，并同步保存到后台独立的“2FA 管理”列表。
 4. 可以继续输入其他密钥。每个不同密钥都是独立记录，可在同一浏览器页面同时查看，互不覆盖。
 5. 再次输入同一个密钥会复用原记录并更新平台或账号信息，不会创建重复项。动态码每 30 秒自动更新。
 
-邮件验证码查询接口不会返回 2FA，2FA 转换接口也不会查询邮件或子邮箱。管理后台只能查看和删除独立 2FA 记录，不能通过子邮箱配置 2FA。升级前已经绑定在子邮箱上的旧 2FA 会在服务启动时自动迁移到独立列表，并标记原子邮箱地址作为迁移来源。
+邮件验证码查询接口不会返回 2FA，2FA 转换接口也不会查询邮件或子邮箱。管理后台可以查看、删除以及修改独立 2FA 的平台名称和账号备注，但不会通过编辑功能修改原始密钥，也不能通过子邮箱配置 2FA。升级前已经绑定在子邮箱上的旧 2FA 会在服务启动时自动迁移到独立列表，并标记原子邮箱地址作为迁移来源。
 
-首版只支持最常见的标准 TOTP：`SHA1`、`6` 位、`30` 秒周期，不支持 HOTP。若平台只显示二维码，请在平台界面中寻找“无法扫描”“手动输入”或“设置密钥”；本系统不会从邮件中自动提取 2FA 二维码。
+首版只支持最常见的标准 TOTP：`SHA1`、`6` 位、`30` 秒周期，不支持 HOTP。二维码图片识别依赖浏览器的 `BarcodeDetector`，不支持时请在平台界面中寻找“无法扫描”“手动输入”或“设置密钥”；本系统不会从邮件中自动提取 2FA 二维码。
 
 TOTP 原始密钥和查询密钥的可恢复副本使用 `MASTER_KEY_HEX` 进行 AES-256-GCM 加密。敏感信息不会进入后台常规状态接口；管理员必须重新输入当前登录密码，才能按需查看查询密钥、TOTP 手动密钥和当前动态码。公开页不会把 2FA 原始密钥写入 `localStorage` 或 `sessionStorage`，关闭或刷新页面后需要重新输入；后台保存的记录仍会保留，直到管理员删除。
 
@@ -132,6 +138,8 @@ docker compose -f compose.production.yaml logs --tail=100 worker
 docker compose -f compose.production.yaml logs --tail=100 caddy
 ```
 
+后台“运行概览”会显示邮件 Worker 心跳和当日查询指标；“安全设置”可以查看当前管理端登录会话，并退出其他浏览器或设备。
+
 更新应用可重新运行一键部署命令，或在安装目录中手动执行：
 
 ```bash
@@ -147,11 +155,11 @@ cd /opt/icloud-hq
 docker compose -f compose.production.yaml down
 ```
 
-备份 PostgreSQL：
+生产配置默认每 24 小时自动备份 PostgreSQL 到 `/opt/icloud-hq/backups`，并保留 14 天。立即创建一次备份：
 
 ```bash
 cd /opt/icloud-hq
-docker compose -f compose.production.yaml exec -T db pg_dump -U codevault codevault | gzip > codevault-$(date +%F).sql.gz
+docker compose -f compose.production.yaml run --rm backup sh /usr/local/bin/backup.sh once
 ```
 
 不要删除 Docker 的 `postgres_data` 卷，除非确定要永久删除所有配置和记录。
@@ -179,6 +187,12 @@ docker compose -f compose.production.yaml exec -T db pg_dump -U codevault codeva
 | `SESSION_HOURS` | `12` | 管理员登录会话时长 |
 | `QUERY_LIMIT_PER_10_MINUTES` | `30` | 单 IP 每十分钟查询上限 |
 | `LOGIN_LIMIT_PER_15_MINUTES` | `10` | 单 IP 每十五分钟登录尝试上限 |
+| `QUERY_FAILURE_LIMIT_PER_15_MINUTES` | `8` | 单 IP 连续错误查询的持久限制 |
+| `LOGIN_FAILURE_LIMIT_PER_15_MINUTES` | `5` | 单 IP 连续密码错误的持久限制 |
+| `UNMATCHED_RETENTION_DAYS` | `14` | 未匹配邮件元数据保留天数 |
+| `AUDIT_RETENTION_DAYS` | `90` | 审计日志保留天数 |
+| `BACKUP_INTERVAL_HOURS` | `24` | 自动数据库备份间隔小时数 |
+| `BACKUP_RETENTION_DAYS` | `14` | 自动数据库备份保留天数 |
 | `ADMIN_ALLOWED_IPS` | 空 | 可访问管理端的精确 IP 列表 |
 
 ## 自动构建与镜像

@@ -57,6 +57,7 @@
               <div class="field">
                 <label for="totp-secret">2FA 手动密钥或 otpauth 地址</label>
                 <textarea id="totp-secret" name="secret" rows="4" maxlength="4096" autocomplete="off" spellcheck="false" required placeholder="JBSWY3DPEHPK3PXP 或 otpauth://totp/..."></textarea>
+                <div class="field-tools"><input id="totp-qr-file" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp"><button id="totp-qr-upload" class="btn btn-secondary" type="button"><i data-lucide="scan-qr-code" class="icon"></i><span>识别二维码图片</span></button><small>图片仅在当前浏览器本地识别，不会上传。</small></div>
               </div>
               <div class="form-grid totp-meta-fields">
                 <div class="field"><label for="totp-issuer">平台名称（可选）</label><input id="totp-issuer" maxlength="120" placeholder="例如 GitHub"></div>

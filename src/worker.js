@@ -2,7 +2,7 @@
 
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
-const { pool, initDatabase, decrypt, encrypt, cleanExpired } = require('./lib');
+const { pool, initDatabase, decrypt, encrypt, cleanExpired, updateRuntimeStatus } = require('./lib');
 const { extractCode, findAlias } = require('./extract');
 
 const pollSeconds = Math.max(5, Number(process.env.IMAP_POLL_SECONDS || 15));
@@ -118,7 +118,7 @@ async function syncAccount(account) {
     }
     await pool.query(
       `UPDATE mail_accounts SET status = 'connected', last_error = NULL,
-       last_synced_at = NOW(), updated_at = NOW() WHERE id = $1`,
+       last_synced_at = NOW(), sync_requested_at = NULL, updated_at = NOW() WHERE id = $1`,
       [account.id]
     );
   } catch (error) {
@@ -134,12 +134,17 @@ async function syncAccount(account) {
 }
 
 async function cycle() {
-  const result = await pool.query('SELECT * FROM mail_accounts WHERE enabled = TRUE ORDER BY id');
+  await updateRuntimeStatus('worker', 'running');
+  const result = await pool.query(
+    'SELECT * FROM mail_accounts WHERE enabled = TRUE ORDER BY sync_requested_at DESC NULLS LAST, id'
+  );
   for (const account of result.rows) await syncAccount(account);
+  await updateRuntimeStatus('worker', 'idle');
 }
 
 async function start() {
   await initDatabase();
+  await updateRuntimeStatus('worker', 'starting');
   console.log(`Mail worker started; polling every ${pollSeconds} seconds`);
   let cleanupCounter = 0;
   while (true) {
@@ -157,5 +162,6 @@ async function start() {
 
 start().catch((error) => {
   console.error(error);
+  updateRuntimeStatus('worker', 'error', error.message).catch(console.error);
   process.exit(1);
 });

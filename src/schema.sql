@@ -10,11 +10,28 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS sessions (
   id_hash TEXT PRIMARY KEY,
+  session_id BIGSERIAL,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   csrf_token TEXT NOT NULL,
+  ip_digest TEXT,
+  user_agent TEXT NOT NULL DEFAULT '',
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS session_id BIGINT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip_digest TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT '';
+CREATE SEQUENCE IF NOT EXISTS sessions_session_id_seq OWNED BY sessions.session_id;
+ALTER TABLE sessions ALTER COLUMN session_id SET DEFAULT nextval('sessions_session_id_seq');
+UPDATE sessions SET session_id = nextval('sessions_session_id_seq') WHERE session_id IS NULL;
+SELECT setval(
+  'sessions_session_id_seq',
+  GREATEST((SELECT COALESCE(MAX(session_id), 0) FROM sessions), 1),
+  EXISTS (SELECT 1 FROM sessions)
+);
+ALTER TABLE sessions ALTER COLUMN session_id SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_session_id_idx ON sessions(session_id);
 
 CREATE TABLE IF NOT EXISTS login_challenges (
   id_hash TEXT PRIMARY KEY,
@@ -36,11 +53,13 @@ CREATE TABLE IF NOT EXISTS mail_accounts (
   status TEXT NOT NULL DEFAULT 'pending',
   last_error TEXT,
   last_synced_at TIMESTAMPTZ,
+  sync_requested_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS uid_validity TEXT;
+ALTER TABLE mail_accounts ADD COLUMN IF NOT EXISTS sync_requested_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS aliases (
   id BIGSERIAL PRIMARY KEY,
@@ -123,3 +142,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS audit_logs_created_idx ON audit_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS runtime_status (
+  service TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'starting',
+  detail TEXT NOT NULL DEFAULT '',
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

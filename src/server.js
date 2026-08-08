@@ -18,6 +18,9 @@ const port = Number(process.env.PORT || 3000);
 const sessionHours = Number(process.env.SESSION_HOURS || 12);
 const queryLimit = Number(process.env.QUERY_LIMIT_PER_10_MINUTES || 30);
 const loginLimit = Number(process.env.LOGIN_LIMIT_PER_15_MINUTES || 10);
+const queryFailureLimit = Number(process.env.QUERY_FAILURE_LIMIT_PER_15_MINUTES || 8);
+const loginFailureLimit = Number(process.env.LOGIN_FAILURE_LIMIT_PER_15_MINUTES || 5);
+const workerFreshSeconds = Math.max(90, Number(process.env.IMAP_POLL_SECONDS || 15) * 4);
 const adminAllowedIps = new Set(String(process.env.ADMIN_ALLOWED_IPS || '')
   .split(',').map((item) => item.trim()).filter(Boolean));
 const rateBuckets = new Map();
@@ -73,6 +76,21 @@ function rateLimit(key, max, windowMs) {
     allowed: current.count <= max,
     retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
   };
+}
+
+async function failureGuard(action, ip, max, windowMinutes = 15) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count,
+      GREATEST(1, CEIL(EXTRACT(EPOCH FROM (
+        MIN(created_at) + ($3::text || ' minutes')::interval - NOW()
+      )))::int) AS retry_after
+     FROM audit_logs
+     WHERE action = $1 AND ip_digest = $2
+       AND created_at > NOW() - ($3::text || ' minutes')::interval`,
+    [action, digest(ip), String(windowMinutes)]
+  );
+  const row = result.rows[0];
+  return { allowed: row.count < max, retryAfter: row.retry_after || windowMinutes * 60 };
 }
 
 async function findPublicAlias(token) {
@@ -167,13 +185,16 @@ function adminApi(handler) {
   }];
 }
 
-async function createSession(userId, res) {
+async function createSession(userId, req, res) {
   const token = randomToken(32);
   const csrfToken = randomToken(24);
   await pool.query(
-    `INSERT INTO sessions(id_hash, user_id, csrf_token, expires_at)
-     VALUES ($1, $2, $3, NOW() + ($4 || ' hours')::interval)`,
-    [digest(token), userId, csrfToken, String(sessionHours)]
+    `INSERT INTO sessions(id_hash, user_id, csrf_token, ip_digest, user_agent, expires_at)
+     VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' hours')::interval)`,
+    [
+      digest(token), userId, csrfToken, digest(extractClientIp(req)),
+      String(req.headers['user-agent'] || '').slice(0, 300), String(sessionHours)
+    ]
   );
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader('Set-Cookie', `cv_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionHours * 3600}${secure}`);
@@ -211,7 +232,18 @@ async function testImap({ email, password, host = 'imap.mail.me.com', port: imap
   }
 }
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', async (_req, res) => {
+  noStore(res);
+  try {
+    await pool.query('SELECT 1');
+    const worker = await pool.query("SELECT status, heartbeat_at FROM runtime_status WHERE service = 'worker'");
+    const heartbeat = worker.rows[0]?.heartbeat_at;
+    const workerHealthy = heartbeat && Date.now() - new Date(heartbeat).getTime() < workerFreshSeconds * 1000;
+    res.json({ ok: true, database: 'ok', worker: workerHealthy ? worker.rows[0].status : 'stale' });
+  } catch (_error) {
+    res.status(503).json({ ok: false, database: 'error', worker: 'unknown' });
+  }
+});
 app.get('/', (_req, res) => {
   noStore(res);
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
@@ -234,6 +266,11 @@ app.post('/api/query', async (req, res, next) => {
     return res.status(429).json({ error: `请求过于频繁，请在 ${limit.retryAfter} 秒后重试` });
   }
   try {
+    const failure = await failureGuard('query_failed', ip, queryFailureLimit);
+    if (!failure.allowed) {
+      res.set('Retry-After', String(failure.retryAfter));
+      return res.status(429).json({ error: `查询密钥连续错误次数过多，请在 ${failure.retryAfter} 秒后重试` });
+    }
     const token = String(req.body.token || '').trim();
     if (token.length < 20 || token.length > 200) {
       await audit({ actor: 'public', action: 'query_failed', ip, detail: 'invalid token format' });
@@ -274,6 +311,11 @@ app.post('/api/query/totp', async (req, res, next) => {
   const limit = rateLimit(`query-totp-code:${ip}`, 60, 10 * 60 * 1000);
   if (!limit.allowed) return res.status(429).json({ error: '2FA 查询过于频繁，请稍后再试' });
   try {
+    const failure = await failureGuard('totp_failed', ip, 20);
+    if (!failure.allowed) {
+      res.set('Retry-After', String(failure.retryAfter));
+      return res.status(429).json({ error: `无效 2FA 密钥输入次数过多，请在 ${failure.retryAfter} 秒后重试` });
+    }
     const requested = Array.isArray(req.body.entries)
       ? req.body.entries.slice(0, 50)
       : [{ secret: req.body.secret, issuer: req.body.issuer, accountName: req.body.accountName }];
@@ -286,7 +328,10 @@ app.post('/api/query/totp', async (req, res, next) => {
     await audit({ actor: 'public', action: 'totp_converted', target: converted.map((item) => item.id).join(','), ip });
     res.json({ totps: converted });
   } catch (error) {
-    if (/TOTP|HOTP|2FA|Base32|otpauth/.test(error.message || '')) return res.status(400).json({ error: error.message });
+    if (/TOTP|HOTP|2FA|Base32|otpauth/.test(error.message || '')) {
+      await audit({ actor: 'public', action: 'totp_failed', ip, detail: 'invalid input' });
+      return res.status(400).json({ error: error.message });
+    }
     next(error);
   }
 });
@@ -299,6 +344,11 @@ app.post('/api/admin/login', adminNetwork, async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || '');
+    const failure = await failureGuard('login_failed', ip, loginFailureLimit);
+    if (!failure.allowed) {
+      res.set('Retry-After', String(failure.retryAfter));
+      return res.status(429).json({ error: `登录失败次数过多，请在 ${failure.retryAfter} 秒后重试` });
+    }
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
     if (!user || !(await verifyPassword(password, user.password_hash))) {
@@ -314,7 +364,7 @@ app.post('/api/admin/login', adminNetwork, async (req, res, next) => {
       );
       return res.json({ requiresTotp: true, challenge });
     }
-    await createSession(user.id, res);
+    await createSession(user.id, req, res);
     await audit({ actor: `user:${user.id}`, action: 'login_success', ip });
     res.json({ ok: true });
   } catch (error) { next(error); }
@@ -322,6 +372,9 @@ app.post('/api/admin/login', adminNetwork, async (req, res, next) => {
 
 app.post('/api/admin/login/totp', adminNetwork, async (req, res, next) => {
   noStore(res);
+  const ip = extractClientIp(req);
+  const limit = rateLimit(`login-totp:${ip}`, loginLimit, 15 * 60 * 1000);
+  if (!limit.allowed) return res.status(429).json({ error: '动态验证码尝试过多，请稍后再试' });
   try {
     const challenge = String(req.body.challenge || '');
     const code = String(req.body.code || '').replace(/\s/g, '');
@@ -332,19 +385,21 @@ app.post('/api/admin/login/totp', adminNetwork, async (req, res, next) => {
       [digest(challenge)]
     );
     if (!result.rowCount || !authenticator.check(code, decrypt(result.rows[0].totp_secret_encrypted))) {
+      await audit({ actor: 'admin-challenge', action: 'login_totp_failed', ip });
       return res.status(401).json({ error: '动态验证码不正确' });
     }
     await pool.query('DELETE FROM login_challenges WHERE id_hash = $1', [digest(challenge)]);
-    await createSession(result.rows[0].user_id, res);
-    await audit({ actor: `user:${result.rows[0].user_id}`, action: 'login_totp_success', ip: extractClientIp(req) });
+    await createSession(result.rows[0].user_id, req, res);
+    await audit({ actor: `user:${result.rows[0].user_id}`, action: 'login_totp_success', ip });
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
 
 app.get('/api/admin/state', ...adminApi(async (req, res) => {
   noStore(res);
-  const [accounts, aliases, totpEntries, recent, unmatched, auditResult] = await Promise.all([
-    pool.query(`SELECT id, email, host, port, secure, enabled, status, last_error, last_synced_at, created_at FROM mail_accounts ORDER BY id`),
+  const currentSessionHash = digest(req.sessionToken);
+  const [accounts, aliases, totpEntries, recent, unmatched, auditResult, metrics, runtime, sessions] = await Promise.all([
+    pool.query(`SELECT id, email, host, port, secure, enabled, status, last_error, last_synced_at, sync_requested_at, created_at FROM mail_accounts ORDER BY id`),
     pool.query(`SELECT a.id, a.mail_account_id, a.address, a.label, a.enabled, a.token_hint, a.token_expires_at, a.created_at,
       (a.token_encrypted IS NOT NULL) AS token_recoverable,
       (SELECT received_at FROM verification_messages v WHERE v.alias_id = a.id ORDER BY received_at DESC LIMIT 1) AS last_received_at
@@ -354,7 +409,21 @@ app.get('/api/admin/state', ...adminApi(async (req, res) => {
     pool.query(`SELECT v.id, v.alias_id, a.address, v.sender, v.subject, v.code_masked, v.confidence, v.received_at, v.expires_at
       FROM verification_messages v LEFT JOIN aliases a ON a.id = v.alias_id ORDER BY v.received_at DESC LIMIT 50`),
     pool.query(`SELECT id, sender, subject, recipient_headers, received_at FROM unmatched_messages ORDER BY received_at DESC LIMIT 30`),
-    pool.query(`SELECT actor, action, target, detail, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 50`)
+    pool.query(`SELECT actor, action, target, detail, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 100`),
+    pool.query(`SELECT
+      COUNT(*) FILTER (WHERE action = 'query_success' AND created_at >= CURRENT_DATE)::int AS queries_today,
+      COUNT(*) FILTER (WHERE action = 'query_failed' AND created_at >= CURRENT_DATE)::int AS query_failures_today,
+      COUNT(*) FILTER (WHERE action = 'totp_converted' AND created_at >= CURRENT_DATE)::int AS totp_conversions_today,
+      COUNT(*) FILTER (WHERE action = 'login_failed' AND created_at >= CURRENT_DATE)::int AS login_failures_today
+      FROM audit_logs`),
+    pool.query(
+      `SELECT service, status, detail, heartbeat_at,
+        heartbeat_at > NOW() - ($1::text || ' seconds')::interval AS fresh
+       FROM runtime_status ORDER BY service`,
+      [String(workerFreshSeconds)]
+    ),
+    pool.query(`SELECT session_id, user_agent, created_at, expires_at, (id_hash = $1) AS current
+      FROM sessions WHERE user_id = $2 AND expires_at > NOW() ORDER BY created_at DESC`, [currentSessionHash, req.admin.id])
   ]);
   res.json({
     csrfToken: req.admin.csrf_token,
@@ -364,8 +433,41 @@ app.get('/api/admin/state', ...adminApi(async (req, res) => {
     totpEntries: totpEntries.rows,
     recent: recent.rows,
     unmatched: unmatched.rows,
-    audit: auditResult.rows
+    audit: auditResult.rows,
+    metrics: metrics.rows[0],
+    runtime: runtime.rows,
+    sessions: sessions.rows
   });
+}));
+
+app.post('/api/admin/mail-account/:id/sync', ...adminApi(async (req, res) => {
+  const result = await pool.query(
+    `UPDATE mail_accounts SET sync_requested_at = NOW(), status = 'pending', updated_at = NOW()
+     WHERE id = $1 AND enabled = TRUE RETURNING email`,
+    [req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '母邮箱不存在或已停用' });
+  await audit({ actor: `user:${req.admin.id}`, action: 'mail_sync_requested', target: result.rows[0].email, ip: extractClientIp(req) });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/admin/sessions/:id', ...adminApi(async (req, res) => {
+  const result = await pool.query(
+    'DELETE FROM sessions WHERE session_id = $1 AND user_id = $2 AND id_hash <> $3 RETURNING session_id',
+    [req.params.id, req.admin.id, digest(req.sessionToken)]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '会话不存在或不能撤销当前会话' });
+  await audit({ actor: `user:${req.admin.id}`, action: 'session_revoked', target: String(result.rows[0].session_id), ip: extractClientIp(req) });
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/sessions/revoke-others', ...adminApi(async (req, res) => {
+  const result = await pool.query(
+    'DELETE FROM sessions WHERE user_id = $1 AND id_hash <> $2',
+    [req.admin.id, digest(req.sessionToken)]
+  );
+  await audit({ actor: `user:${req.admin.id}`, action: 'other_sessions_revoked', detail: String(result.rowCount), ip: extractClientIp(req) });
+  res.json({ ok: true, revoked: result.rowCount });
 }));
 
 app.post('/api/admin/mail-account', ...adminApi(async (req, res) => {
@@ -387,6 +489,28 @@ app.post('/api/admin/mail-account', ...adminApi(async (req, res) => {
     [email, encrypt(appPassword), host, imapPort]
   );
   await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_saved', target: email, ip: extractClientIp(req) });
+  res.json({ ok: true, account: result.rows[0] });
+}));
+
+app.patch('/api/admin/mail-account/:id', ...adminApi(async (req, res) => {
+  const current = await pool.query('SELECT * FROM mail_accounts WHERE id = $1', [req.params.id]);
+  if (!current.rowCount) return res.status(404).json({ error: '母邮箱不存在' });
+  const email = normalizeEmail(req.body.email);
+  const host = String(req.body.host || 'imap.mail.me.com').trim();
+  const imapPort = Number(req.body.port || 993);
+  const suppliedPassword = String(req.body.appPassword || '').trim();
+  const appPassword = suppliedPassword || decrypt(current.rows[0].app_password_encrypted);
+  if (!validEmail(email) || !host || imapPort < 1 || imapPort > 65535) {
+    return res.status(400).json({ error: '请填写有效的邮箱和 IMAP 配置' });
+  }
+  await testImap({ email, password: appPassword, host, port: imapPort, secure: true });
+  const result = await pool.query(
+    `UPDATE mail_accounts SET email = $1, host = $2, port = $3,
+       app_password_encrypted = $4, status = 'connected', last_error = NULL,
+       updated_at = NOW() WHERE id = $5 RETURNING id, email`,
+    [email, host, imapPort, suppliedPassword ? encrypt(suppliedPassword) : current.rows[0].app_password_encrypted, req.params.id]
+  );
+  await audit({ actor: `user:${req.admin.id}`, action: 'mail_account_edited', target: result.rows[0].email, ip: extractClientIp(req) });
   res.json({ ok: true, account: result.rows[0] });
 }));
 
@@ -420,6 +544,72 @@ app.post('/api/admin/aliases', ...adminApi(async (req, res) => {
   );
   await audit({ actor: `user:${req.admin.id}`, action: 'alias_created', target: address, ip: extractClientIp(req) });
   res.status(201).json({ ok: true, alias: result.rows[0], token });
+}));
+
+app.patch('/api/admin/aliases/:id', ...adminApi(async (req, res) => {
+  const address = normalizeEmail(req.body.address);
+  const label = String(req.body.label || '').trim().slice(0, 80);
+  const accountId = Number(req.body.mailAccountId);
+  const expiryMode = String(req.body.expiryMode || 'keep');
+  const expiresDays = Math.max(1, Math.min(3650, Number(req.body.expiresDays || 30)));
+  if (!validEmail(address) || !accountId || !['keep', 'never', 'days'].includes(expiryMode)) {
+    return res.status(400).json({ error: '请填写有效的子邮箱配置' });
+  }
+  const result = await pool.query(
+    `UPDATE aliases SET mail_account_id = $1, address = $2, label = $3,
+       token_expires_at = CASE
+         WHEN $4 = 'keep' THEN token_expires_at
+         WHEN $4 = 'never' THEN NULL
+         ELSE NOW() + ($5::text || ' days')::interval
+       END,
+       updated_at = NOW()
+     WHERE id = $6 RETURNING id, address`,
+    [accountId, address, label, expiryMode, String(expiresDays), req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
+  await audit({ actor: `user:${req.admin.id}`, action: 'alias_edited', target: address, ip: extractClientIp(req) });
+  res.json({ ok: true, alias: result.rows[0] });
+}));
+
+app.get('/api/admin/aliases/export', ...adminApi(async (req, res) => {
+  noStore(res);
+  const result = await pool.query(
+    `SELECT a.address, a.label, a.enabled, a.token_expires_at, m.email AS mail_account_email
+     FROM aliases a JOIN mail_accounts m ON m.id = a.mail_account_id
+     ORDER BY m.email, a.address`
+  );
+  await audit({ actor: `user:${req.admin.id}`, action: 'aliases_exported', detail: String(result.rowCount), ip: extractClientIp(req) });
+  res.json({ aliases: result.rows });
+}));
+
+app.post('/api/admin/aliases/import', ...adminApi(async (req, res) => {
+  const accountId = Number(req.body.mailAccountId);
+  const requested = Array.isArray(req.body.aliases) ? req.body.aliases.slice(0, 500) : [];
+  const account = await pool.query('SELECT id, email FROM mail_accounts WHERE id = $1', [accountId]);
+  if (!account.rowCount) return res.status(400).json({ error: '请选择有效的母邮箱' });
+  if (!requested.length) return res.status(400).json({ error: '请提供至少一个子邮箱' });
+
+  const created = [];
+  const skipped = [];
+  for (const item of requested) {
+    const address = normalizeEmail(typeof item === 'string' ? item : item.address);
+    const label = String(typeof item === 'string' ? '' : item.label || '').trim().slice(0, 80);
+    if (!validEmail(address)) {
+      skipped.push({ address, reason: '邮箱格式无效' });
+      continue;
+    }
+    const token = `cv_${randomToken(24)}`;
+    const result = await pool.query(
+      `INSERT INTO aliases(mail_account_id, address, label, token_digest, token_encrypted, token_hint)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (address) DO NOTHING RETURNING id, address`,
+      [accountId, address, label, digest(token), encrypt(token), token.slice(-6)]
+    );
+    if (result.rowCount) created.push({ address, token });
+    else skipped.push({ address, reason: '子邮箱已存在' });
+  }
+  await audit({ actor: `user:${req.admin.id}`, action: 'aliases_imported', target: account.rows[0].email, detail: `created=${created.length};skipped=${skipped.length}`, ip: extractClientIp(req) });
+  res.status(201).json({ ok: true, created, skipped });
 }));
 
 app.post('/api/admin/aliases/:id/regenerate', ...adminApi(async (req, res) => {
@@ -496,6 +686,19 @@ app.post('/api/admin/totp-entries/:id/secrets', ...adminApi(async (req, res) => 
   });
 }));
 
+app.patch('/api/admin/totp-entries/:id', ...adminApi(async (req, res) => {
+  const issuer = String(req.body.issuer || '').trim().slice(0, 120);
+  const accountName = String(req.body.accountName || '').trim().slice(0, 160);
+  const result = await pool.query(
+    `UPDATE totp_entries SET issuer = $1, account_name = $2, updated_at = NOW()
+     WHERE id = $3 RETURNING id`,
+    [issuer, accountName, req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '2FA 记录不存在' });
+  await audit({ actor: `user:${req.admin.id}`, action: 'totp_entry_edited', target: String(result.rows[0].id), ip: extractClientIp(req) });
+  res.json({ ok: true });
+}));
+
 app.delete('/api/admin/totp-entries/:id', ...adminApi(async (req, res) => {
   const result = await pool.query('DELETE FROM totp_entries WHERE id = $1 RETURNING id', [req.params.id]);
   if (!result.rowCount) return res.status(404).json({ error: '2FA 记录不存在' });
@@ -548,6 +751,17 @@ app.post('/api/admin/logout', ...adminApi(async (req, res) => {
 app.use((error, req, res, _next) => {
   console.error(error);
   noStore(res);
+  if (error.code === '23505') {
+    const message = error.constraint === 'mail_accounts_email_key'
+      ? '该母邮箱已经存在'
+      : error.constraint === 'aliases_address_key'
+        ? '该子邮箱已经存在'
+        : '相同记录已经存在';
+    return res.status(409).json({ error: message });
+  }
+  if (error.code === '23503') {
+    return res.status(400).json({ error: '关联的母邮箱不存在或已被删除' });
+  }
   const known = /authentication|login|credentials/i.test(error.message || '');
   res.status(known ? 400 : 500).json({ error: known ? 'iCloud IMAP 登录失败，请检查邮箱和 App 专用密码' : '服务器处理失败' });
 });

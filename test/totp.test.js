@@ -95,3 +95,15 @@ test('public page keeps mail and TOTP in separate tabs and forms', () => {
   assert.match(script, /request\('\/api\/query\/totp', \{ entries \}\)/);
   assert.match(script, /const activeTotps = new Map\(\)/);
 });
+
+test('public QR recognition stays local and only fills the raw TOTP input', () => {
+  const fs = require('node:fs');
+  const html = fs.readFileSync('public/index.html', 'utf8');
+  const script = fs.readFileSync('public/query.js', 'utf8');
+
+  assert.match(html, /id="totp-qr-file"/);
+  assert.match(script, /new BarcodeDetector\(\{ formats: \['qr_code'\] \}\)/);
+  assert.match(script, /startsWith\('otpauth:\/\/totp\/'\)/);
+  assert.match(script, /totpSecretInput\.value = await detectQrCode\(file\)/);
+  assert.doesNotMatch(script, /FormData|\/api\/.*qr|fetch\([^\n]*file/);
+});

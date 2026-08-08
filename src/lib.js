@@ -121,10 +121,29 @@ async function audit({ actor, action, target = '', ip = '', detail = '' }) {
 }
 
 async function cleanExpired() {
+  const unmatchedRetentionDays = Math.max(1, Math.min(365, Number(process.env.UNMATCHED_RETENTION_DAYS || 14)));
+  const auditRetentionDays = Math.max(7, Math.min(3650, Number(process.env.AUDIT_RETENTION_DAYS || 90)));
   await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
   await pool.query('DELETE FROM login_challenges WHERE expires_at < NOW()');
   await pool.query('DELETE FROM verification_messages WHERE expires_at < NOW()');
-  await pool.query("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '90 days'");
+  await pool.query(
+    "DELETE FROM unmatched_messages WHERE created_at < NOW() - ($1::text || ' days')::interval",
+    [String(unmatchedRetentionDays)]
+  );
+  await pool.query(
+    "DELETE FROM audit_logs WHERE created_at < NOW() - ($1::text || ' days')::interval",
+    [String(auditRetentionDays)]
+  );
+}
+
+async function updateRuntimeStatus(service, status, detail = '') {
+  await pool.query(
+    `INSERT INTO runtime_status(service, status, detail, heartbeat_at, updated_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
+     ON CONFLICT (service) DO UPDATE SET status = EXCLUDED.status,
+       detail = EXCLUDED.detail, heartbeat_at = NOW(), updated_at = NOW()`,
+    [service, status, String(detail).slice(0, 500)]
+  );
 }
 
 module.exports = {
@@ -141,5 +160,6 @@ module.exports = {
   maskEmail,
   extractClientIp,
   audit,
-  cleanExpired
+  cleanExpired,
+  updateRuntimeStatus
 };

@@ -6,6 +6,8 @@ const mailErrorBox = document.querySelector('#mail-query-error');
 const mailResultBox = document.querySelector('#mail-result');
 const totpForm = document.querySelector('#totp-query-form');
 const totpSecretInput = document.querySelector('#totp-secret');
+const totpQrFileInput = document.querySelector('#totp-qr-file');
+const totpQrUploadButton = document.querySelector('#totp-qr-upload');
 const totpErrorBox = document.querySelector('#totp-query-error');
 const totpResultBox = document.querySelector('#totp-result');
 const toast = document.querySelector('#toast');
@@ -114,6 +116,21 @@ async function convertTotps(entries) {
   return request('/api/query/totp', { entries });
 }
 
+async function detectQrCode(file) {
+  if (!('BarcodeDetector' in window)) throw new Error('当前浏览器不支持本地二维码识别，请直接粘贴原始密钥或 otpauth 地址');
+  const supported = await BarcodeDetector.getSupportedFormats();
+  if (!supported.includes('qr_code')) throw new Error('当前浏览器未启用二维码识别，请直接粘贴原始密钥');
+  const bitmap = await createImageBitmap(file);
+  try {
+    const codes = await new BarcodeDetector({ formats: ['qr_code'] }).detect(bitmap);
+    const value = codes[0]?.rawValue || '';
+    if (!value.toLowerCase().startsWith('otpauth://totp/')) throw new Error('图片中没有识别到标准 TOTP 二维码');
+    return value;
+  } finally {
+    bitmap.close();
+  }
+}
+
 async function refreshTotps() {
   if (totpRefreshInFlight || !activeTotps.size) return;
   totpRefreshInFlight = true;
@@ -146,6 +163,24 @@ document.querySelectorAll('[data-query-tab]').forEach((button) => button.addEven
     panel.hidden = !active;
   });
 }));
+
+totpQrUploadButton.addEventListener('click', () => totpQrFileInput.click());
+totpQrFileInput.addEventListener('change', async () => {
+  const file = totpQrFileInput.files[0];
+  if (!file) return;
+  totpErrorBox.textContent = '';
+  totpQrUploadButton.disabled = true;
+  try {
+    totpSecretInput.value = await detectQrCode(file);
+    showToast('二维码已识别，请确认后转换');
+    totpSecretInput.focus();
+  } catch (error) {
+    totpErrorBox.textContent = error.message;
+  } finally {
+    totpQrUploadButton.disabled = false;
+    totpQrFileInput.value = '';
+  }
+});
 
 mailForm.addEventListener('submit', async (event) => {
   event.preventDefault();
