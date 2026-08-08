@@ -1,0 +1,9 @@
+node_modules
+.git
+.github
+.env
+data
+*.log
+*.zip
+*.tar.gz
+卸载脚本

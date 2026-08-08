@@ -1,0 +1,184 @@
+# iCloud 子邮箱验证码中心
+
+这是一个可直接部署到 Linux 服务器的私人验证码查询系统。公开前台允许多人访问，但每个人必须使用管理员分配的独立查询密钥，并且只能读取该密钥绑定子邮箱的最新有效验证码。管理后台、邮箱凭据、子邮箱配置、未匹配邮件和审计记录仅管理员可访问。
+
+本项目仅用于你本人拥有或已得到明确授权的邮箱，不用于公共接码、账号交易或绕过第三方平台风控。它读取发送到邮箱的普通验证邮件，不能读取 Apple 受信任设备或手机号收到的 Apple ID 登录验证码。
+
+## 已包含功能
+
+- 公网多人查询页面：`/`
+- 独立管理员入口：`/admin/login`
+- 管理端服务端会话校验、CSRF、登录限流和可选 IP 白名单
+- 管理员 TOTP 双重认证
+- iCloud IMAP App 专用密码连接测试与加密保存
+- 多母邮箱、多子邮箱管理
+- 每个子邮箱独立高强度查询密钥，数据库只保存 HMAC 摘要
+- 查询密钥创建或重置时只展示一次
+- 常驻 IMAP Worker、断线恢复、UID 游标与 Message-ID 去重
+- 按原始邮件头识别 `To`、`Delivered-To`、`X-Original-To` 等位置中的子邮箱
+- 中文和英文验证码提取、短期加密保存及自动清理
+- 查询 IP 限流、管理员审计、未匹配邮件检查
+- PostgreSQL 持久化、Caddy 自动 HTTPS、Docker Compose 一键运行
+
+## 服务器要求
+
+- Ubuntu 22.04/24.04 或其他支持 Docker 的 Linux
+- 推荐至少 1 核 CPU、2 GB 内存、20 GB 磁盘
+- 一个解析到服务器公网 IP 的域名
+- 防火墙开放 TCP `80`、TCP/UDP `443`
+- 服务器可连接 `imap.mail.me.com:993`
+
+数据库和 Web 容器没有发布到公网，公网只经过 Caddy 的 `80/443` 端口。
+
+## 部署
+
+先在域名服务商处添加 A 记录，将例如 `code.example.com` 指向服务器公网 IP。然后使用 root 用户或具有 `sudo` 权限的用户登录服务器，运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/icloud-hq/main/deploy.sh \
+  -o /tmp/icloud-hq-deploy.sh &&
+sudo sh /tmp/icloud-hq-deploy.sh
+```
+
+脚本会自动安装 Docker、下载生产配置并拉取 GitHub Container Registry 中的最新镜像。首次运行时会询问域名、证书邮箱、管理员邮箱和初始管理员密码，并自动生成数据库密码、主加密密钥和查询密钥 Pepper。为避免 `.env` 解析歧义，初始密码只允许字母、数字、点、下划线、波浪号和连字符；部署后可在管理后台修改。配置保存在 `/opt/icloud-hq/.env`，权限为 `600`。
+
+以后再次运行同一条命令即可更新到最新 `latest` 镜像。脚本会保留 `.env`、PostgreSQL 数据和 Caddy 证书，不会重新初始化管理员。
+
+首次启动时，Web 容器会自动建立数据库表并创建一个管理员。然后访问：
+
+```text
+公开查询：https://code.example.com/
+管理登录：https://code.example.com/admin/login
+```
+
+管理员创建后，修改 `.env` 中的 `ADMIN_PASSWORD` 不会更改数据库密码。请在管理后台的“安全设置”里修改管理员密码，并启用 TOTP。
+
+## 接入 iCloud
+
+1. 确认 Apple 账户已经开启双重认证。
+2. 在 Apple 账户页面创建一个 App 专用密码。
+3. 登录管理后台，进入“母邮箱”，点击“接入母邮箱”。
+4. 填写完整 iCloud 邮箱、App 专用密码、服务器 `imap.mail.me.com`、端口 `993`。
+5. 系统会先实际测试 IMAP TLS 登录，成功后才加密保存。
+
+不要填写 Apple ID 日常登录密码，也不要填写 Apple 设备收到的六位登录验证码。
+
+## 添加子邮箱与分发权限
+
+1. 进入“子邮箱”，选择所属母邮箱。
+2. 填写完整子邮箱地址和备注。
+3. 系统生成一个 `cv_` 开头的查询密钥，只显示一次。
+4. 将该密钥单独交给对应查询者。
+5. 查询者访问公开首页，只输入密钥即可看到对应子邮箱的最新有效验证码。
+
+管理员后台之后只能看到密钥末六位。密钥丢失时应点击“重置密钥”，旧密钥会立即失效。
+
+## 管理后台仅限指定 IP
+
+公开查询需要多人访问时，可以保持 `/` 公网开放，同时限制管理后台来源。在 `.env` 中填写管理员公网 IP，多个地址用英文逗号分隔：
+
+```dotenv
+ADMIN_ALLOWED_IPS=203.0.113.10,198.51.100.24
+```
+
+修改后运行：
+
+```bash
+cd /opt/icloud-hq
+docker compose -f compose.production.yaml up -d --force-recreate web
+```
+
+该配置会同时限制 `/admin`、`/admin/login` 和 `/api/admin/*`。如果管理员网络 IP 经常变化，请留空并依靠强密码和 TOTP，或者在服务器前增加 Tailscale/WireGuard。
+
+## 邮件匹配验证
+
+iCloud 的不同转发方式可能保留不同邮件头。添加子邮箱后，先向该地址发送一封测试验证码邮件：
+
+- 成功归类时，“收信记录”会出现对应子邮箱。
+- 无法归类时，邮件会出现在“未匹配子邮箱”中。
+- 未匹配区只保存发件人、主题和原始邮件头，不保存正文。
+
+如果原始邮件头完全不保留子邮箱地址，系统无法可靠区分该转发来源，需要调整转发规则或为该来源增加专用邮件头规则。
+
+## 日常运维
+
+查看状态和日志：
+
+```bash
+cd /opt/icloud-hq
+docker compose -f compose.production.yaml ps
+docker compose -f compose.production.yaml logs --tail=100 web
+docker compose -f compose.production.yaml logs --tail=100 worker
+docker compose -f compose.production.yaml logs --tail=100 caddy
+```
+
+更新应用可重新运行一键部署命令，或在安装目录中手动执行：
+
+```bash
+cd /opt/icloud-hq
+docker compose -f compose.production.yaml pull
+docker compose -f compose.production.yaml up -d --remove-orphans
+```
+
+停止服务但保留数据：
+
+```bash
+cd /opt/icloud-hq
+docker compose -f compose.production.yaml down
+```
+
+备份 PostgreSQL：
+
+```bash
+cd /opt/icloud-hq
+docker compose -f compose.production.yaml exec -T db pg_dump -U codevault codevault | gzip > codevault-$(date +%F).sql.gz
+```
+
+不要删除 Docker 的 `postgres_data` 卷，除非确定要永久删除所有配置和记录。
+
+## 安全说明
+
+- App 专用密码和验证码使用 AES-256-GCM 加密。
+- 管理员密码使用参数化 scrypt 哈希。
+- 查询密钥使用带服务器 Pepper 的 HMAC-SHA-256 摘要，不可从数据库恢复。
+- 验证码默认保存 10 分钟，过期后自动删除。
+- 查询响应使用 `Cache-Control: no-store`，密钥通过 POST 请求传输，不进入 URL。
+- 邮件正文不会存入数据库，邮件远程图片也不会加载。
+- PostgreSQL 不开放公网端口。
+- `.env`、数据库备份和 Docker 数据卷都应视为敏感数据。
+
+主加密密钥 `MASTER_KEY_HEX` 丢失后，已保存的 App 专用密码和验证码无法解密。`TOKEN_PEPPER_HEX` 改变后，所有现有查询密钥都会失效。请加密备份 `.env`，不要提交到 Git。
+
+## 配置项
+
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| `CODE_TTL_MINUTES` | `10` | 验证码有效和保留分钟数 |
+| `IMAP_POLL_SECONDS` | `15` | Worker 收信轮询间隔 |
+| `MAX_MESSAGE_BYTES` | `1048576` | 单封邮件最多读取字节数，防止大附件占用内存 |
+| `SESSION_HOURS` | `12` | 管理员登录会话时长 |
+| `QUERY_LIMIT_PER_10_MINUTES` | `30` | 单 IP 每十分钟查询上限 |
+| `LOGIN_LIMIT_PER_15_MINUTES` | `10` | 单 IP 每十五分钟登录尝试上限 |
+| `ADMIN_ALLOWED_IPS` | 空 | 可访问管理端的精确 IP 列表 |
+
+## 自动构建与镜像
+
+GitHub Actions 工作流位于 `.github/workflows/container.yml`。推送到 `main` 后会自动执行语法检查和测试，并构建 `linux/amd64`、`linux/arm64` 两种架构的镜像：
+
+```text
+ghcr.io/wstimin/icloud-hq:latest
+```
+
+推送 `v*` 格式的 Git 标签时还会生成对应版本标签；每次构建也会生成 `sha-*` 标签。Pull Request 只测试和构建，不发布镜像。
+
+## 本地工程验证
+
+项目不要求在本地运行，但修改代码后可执行：
+
+```bash
+npm install
+npm run check
+npm test
+docker compose config
+docker compose build
+```

@@ -1,0 +1,126 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Pool } = require('pg');
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+function requiredHex(name) {
+  const value = process.env[name] || '';
+  if (!/^[a-fA-F0-9]{64}$/.test(value)) {
+    throw new Error(`${name} must contain exactly 64 hexadecimal characters`);
+  }
+  return Buffer.from(value, 'hex');
+}
+
+const masterKey = requiredHex('MASTER_KEY_HEX');
+const tokenPepper = requiredHex('TOKEN_PEPPER_HEX');
+
+async function initDatabase() {
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  await pool.query(schema);
+}
+
+function randomToken(bytes = 24) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+function digest(value) {
+  return crypto.createHmac('sha256', tokenPepper).update(String(value)).digest('hex');
+}
+
+function encrypt(value) {
+  if (value === null || value === undefined) return null;
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', masterKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return ['v1', iv.toString('base64url'), tag.toString('base64url'), ciphertext.toString('base64url')].join('.');
+}
+
+function decrypt(payload) {
+  if (!payload) return null;
+  const [version, ivPart, tagPart, bodyPart] = String(payload).split('.');
+  if (version !== 'v1' || !ivPart || !tagPart || !bodyPart) throw new Error('Invalid encrypted payload');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', masterKey, Buffer.from(ivPart, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(bodyPart, 'base64url')),
+    decipher.final()
+  ]).toString('utf8');
+}
+
+function hashPassword(password) {
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16);
+    crypto.scrypt(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (error, key) => {
+      if (error) return reject(error);
+      resolve(`scrypt$32768$${salt.toString('base64url')}$${key.toString('base64url')}`);
+    });
+  });
+}
+
+function verifyPassword(password, stored) {
+  return new Promise((resolve) => {
+    const [algorithm, n, saltPart, keyPart] = String(stored || '').split('$');
+    if (algorithm !== 'scrypt' || !saltPart || !keyPart) return resolve(false);
+    const expected = Buffer.from(keyPart, 'base64url');
+    crypto.scrypt(password, Buffer.from(saltPart, 'base64url'), expected.length, {
+      N: Number(n), r: 8, p: 1, maxmem: 64 * 1024 * 1024
+    }, (error, actual) => {
+      resolve(!error && actual.length === expected.length && crypto.timingSafeEqual(actual, expected));
+    });
+  });
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmail(value));
+}
+
+function maskEmail(value) {
+  const [local, domain = ''] = String(value || '').split('@');
+  const shown = local.length <= 2 ? local.slice(0, 1) : local.slice(0, 3);
+  return `${shown}${'*'.repeat(Math.max(2, Math.min(8, local.length - shown.length)))}@${domain}`;
+}
+
+function extractClientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+}
+
+async function audit({ actor, action, target = '', ip = '', detail = '' }) {
+  await pool.query(
+    `INSERT INTO audit_logs(actor, action, target, ip_digest, detail)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [actor, action, target, ip ? digest(ip) : null, String(detail).slice(0, 500)]
+  );
+}
+
+async function cleanExpired() {
+  await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
+  await pool.query('DELETE FROM login_challenges WHERE expires_at < NOW()');
+  await pool.query('DELETE FROM verification_messages WHERE expires_at < NOW()');
+  await pool.query("DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '90 days'");
+}
+
+module.exports = {
+  pool,
+  initDatabase,
+  randomToken,
+  digest,
+  encrypt,
+  decrypt,
+  hashPassword,
+  verifyPassword,
+  normalizeEmail,
+  validEmail,
+  maskEmail,
+  extractClientIp,
+  audit,
+  cleanExpired
+};

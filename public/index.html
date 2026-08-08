@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>验证码查询</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body class="public-shell">
+  <header class="public-head">
+    <div class="brand"><span class="brand-mark"><i data-lucide="mail-check"></i></span><span>验证码中心</span></div>
+    <span class="muted">安全查询</span>
+  </header>
+  <main class="public-main">
+    <section class="query-tool" aria-labelledby="query-title">
+      <h1 id="query-title">查询邮箱验证码</h1>
+      <p>输入管理员提供的专属查询密钥，查看对应邮箱当前有效的最新验证码。</p>
+      <form id="query-form">
+        <div class="field">
+          <label for="token">查询密钥</label>
+          <div class="token-row">
+            <input id="token" name="token" type="password" autocomplete="off" minlength="20" required placeholder="cv_...">
+            <button class="btn btn-primary" type="submit"><i data-lucide="search" class="icon"></i><span>查询</span></button>
+          </div>
+        </div>
+        <p id="query-error" class="message" role="alert"></p>
+      </form>
+      <div id="result" class="result hidden" aria-live="polite"></div>
+    </section>
+  </main>
+  <footer class="public-foot">查询结果不会被浏览器或代理缓存。请勿向无关人员透露查询密钥与验证码。</footer>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/assets/vendor/lucide.js"></script>
+  <script src="/assets/query.js"></script>
+</body>
+</html>

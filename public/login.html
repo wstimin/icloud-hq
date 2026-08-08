@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>管理员登录</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body class="login-shell">
+  <main class="login-box">
+    <div class="brand"><span class="brand-mark"><i data-lucide="shield-check"></i></span><span>验证码中心管理端</span></div>
+    <section class="login-panel">
+      <h1>管理员登录</h1>
+      <form id="login-form">
+        <div class="field"><label for="email">管理邮箱</label><input id="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="password">登录密码</label><input id="password" type="password" autocomplete="current-password" required></div>
+        <div id="totp-field" class="field hidden"><label for="totp">动态验证码</label><input id="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div>
+        <p id="login-error" class="message" role="alert"></p>
+        <button class="btn btn-primary" type="submit"><i data-lucide="log-in" class="icon"></i><span>登录</span></button>
+      </form>
+    </section>
+  </main>
+  <script src="/assets/vendor/lucide.js"></script>
+  <script src="/assets/login.js"></script>
+</body>
+</html>
