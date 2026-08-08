@@ -65,7 +65,7 @@ function render() {
   document.querySelector('#audit-table').innerHTML = table(['操作者', '动作', '目标', '时间'], data.audit.slice(0, 12).map((row) => `<tr><td>${escapeHtml(row.actor)}</td><td>${escapeHtml(row.action)}</td><td>${escapeHtml(row.target || row.detail)}</td><td>${formatDate(row.created_at)}</td></tr>`));
 
   document.querySelector('#accounts-table').innerHTML = table(['邮箱', 'IMAP', '状态', '最后同步', '操作'], data.accounts.map((row) => `<tr><td><strong>${escapeHtml(row.email)}</strong>${row.last_error ? `<br><small class="danger-text">${escapeHtml(row.last_error)}</small>` : ''}</td><td>${escapeHtml(row.host)}:${row.port}</td><td>${badge(row.status, row.enabled)}</td><td>${formatDate(row.last_synced_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-account-toggle="${row.id}">${row.enabled ? '暂停' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除" aria-label="删除" data-account-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
-  document.querySelector('#aliases-table').innerHTML = table(['子邮箱', '备注', '密钥提示', '2FA', '状态', '最近收信', '操作'], data.aliases.map((row) => `<tr><td><strong>${escapeHtml(row.address)}</strong></td><td>${escapeHtml(row.label || '-')}</td><td>末六位 ${escapeHtml(row.token_hint || '-')}</td><td>${row.totp_enabled ? `<span class="badge">已绑定</span>${row.totp_issuer ? `<br><small class="muted">${escapeHtml(row.totp_issuer)}</small>` : ''}` : '<span class="badge off">未绑定</span>'}</td><td>${row.enabled ? '<span class="badge">已启用</span>' : '<span class="badge off">已停用</span>'}</td><td>${formatDate(row.last_received_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-alias-totp="${row.id}">${row.totp_enabled ? '更换 2FA' : '绑定 2FA'}</button>${row.totp_enabled ? `<button class="btn btn-danger btn-icon" title="删除 2FA" aria-label="删除 2FA" data-alias-totp-delete="${row.id}"><i data-lucide="shield-x" class="icon"></i></button>` : ''}<button class="btn btn-secondary" data-alias-reset="${row.id}">重置密钥</button><button class="btn btn-secondary" data-alias-toggle="${row.id}">${row.enabled ? '停用' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除子邮箱" aria-label="删除子邮箱" data-alias-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
+  document.querySelector('#aliases-table').innerHTML = table(['子邮箱', '备注', '密钥提示', '2FA', '状态', '最近收信', '操作'], data.aliases.map((row) => `<tr><td><strong>${escapeHtml(row.address)}</strong></td><td>${escapeHtml(row.label || '-')}</td><td>末六位 ${escapeHtml(row.token_hint || '-')}${row.token_recoverable ? '' : '<br><small class="muted">旧密钥不可恢复</small>'}</td><td>${row.totp_enabled ? `<span class="badge">已绑定</span>${row.totp_issuer ? `<br><small class="muted">${escapeHtml(row.totp_issuer)}</small>` : ''}` : '<span class="badge off">未绑定</span>'}</td><td>${row.enabled ? '<span class="badge">已启用</span>' : '<span class="badge off">已停用</span>'}</td><td>${formatDate(row.last_received_at)}</td><td><div class="actions"><button class="btn btn-secondary" data-alias-secrets="${row.id}"><i data-lucide="eye" class="icon"></i><span>查看密钥与 2FA</span></button><button class="btn btn-secondary" data-alias-totp="${row.id}">${row.totp_enabled ? '更换 2FA' : '绑定 2FA'}</button>${row.totp_enabled ? `<button class="btn btn-danger btn-icon" title="删除 2FA" aria-label="删除 2FA" data-alias-totp-delete="${row.id}"><i data-lucide="shield-x" class="icon"></i></button>` : ''}<button class="btn btn-secondary" data-alias-reset="${row.id}">重置密钥</button><button class="btn btn-secondary" data-alias-toggle="${row.id}">${row.enabled ? '停用' : '启用'}</button><button class="btn btn-danger btn-icon" title="删除子邮箱" aria-label="删除子邮箱" data-alias-delete="${row.id}"><i data-lucide="trash-2" class="icon"></i></button></div></td></tr>`));
 
   document.querySelector('#totp-status').textContent = data.admin.totpEnabled ? 'TOTP 动态验证码已启用。' : 'TOTP 尚未启用，管理员登录目前只使用密码。';
   document.querySelector('#setup-totp').classList.toggle('hidden', data.admin.totpEnabled);
@@ -87,7 +87,7 @@ function openModal(title, body) {
 function closeModal() { modalRoot.innerHTML = ''; }
 
 function showSecret(token) {
-  openModal('查询密钥已生成', `<p>此密钥只展示一次。请现在交给对应查询者，后台不会保存可恢复的明文。</p><div id="generated-token" class="secret-box">${escapeHtml(token)}</div><div class="form-actions"><button id="copy-secret" class="btn btn-primary"><i data-lucide="copy" class="icon"></i><span>复制密钥</span></button></div>`);
+  openModal('查询密钥已生成', `<p>密钥已使用主密钥加密保存。管理员以后可在子邮箱列表中通过密码确认再次查看。</p><div id="generated-token" class="secret-box">${escapeHtml(token)}</div><div class="form-actions"><button id="copy-secret" class="btn btn-primary"><i data-lucide="copy" class="icon"></i><span>复制密钥</span></button></div>`);
   document.querySelector('#copy-secret').addEventListener('click', async () => {
     await navigator.clipboard.writeText(token);
     toastMessage('查询密钥已复制');
@@ -107,6 +107,10 @@ function bindRowActions() {
     if (!confirm('旧查询密钥会立即失效，确认重置？')) return;
     const data = await api(`/api/admin/aliases/${button.dataset.aliasReset}/regenerate`, { method: 'POST' }); await loadState(); showSecret(data.token);
   }));
+  document.querySelectorAll('[data-alias-secrets]').forEach((button) => button.addEventListener('click', () => {
+    const alias = state.data.aliases.find((row) => String(row.id) === button.dataset.aliasSecrets);
+    openAliasSecrets(alias);
+  }));
   document.querySelectorAll('[data-alias-totp]').forEach((button) => button.addEventListener('click', () => {
     const alias = state.data.aliases.find((row) => String(row.id) === button.dataset.aliasTotp);
     openAliasTotp(alias);
@@ -124,6 +128,42 @@ function bindRowActions() {
     if (!confirm('删除后，该子邮箱的验证码记录也会删除。确认继续？')) return;
     await api(`/api/admin/aliases/${button.dataset.aliasDelete}`, { method: 'DELETE' }); await loadState();
   }));
+}
+
+function secretSection(title, value, copyId, missingText) {
+  return `<section class="secret-section"><h3>${escapeHtml(title)}</h3>${value ? `<div class="secret-row"><div class="secret-box">${escapeHtml(value)}</div><button id="${copyId}" class="btn btn-secondary btn-icon" type="button" title="复制${escapeHtml(title)}" aria-label="复制${escapeHtml(title)}"><i data-lucide="copy" class="icon"></i></button></div>` : `<p class="muted">${escapeHtml(missingText)}</p>`}</section>`;
+}
+
+function openAliasSecrets(alias) {
+  if (!alias) return;
+  openModal('查看密钥与 2FA', `<p class="muted">敏感信息不会出现在常规后台数据中。请输入当前管理员登录密码确认查看 ${escapeHtml(alias.address)} 的配置。</p><form id="alias-secrets-form"><div class="field"><label for="alias-secrets-password">当前管理员密码</label><input id="alias-secrets-password" type="password" autocomplete="current-password" required></div><p id="modal-error" class="message"></p><div class="form-actions"><button class="btn btn-secondary" type="button" data-cancel>取消</button><button class="btn btn-primary" type="submit"><i data-lucide="eye" class="icon"></i><span>确认查看</span></button></div></form>`);
+  document.querySelector('[data-cancel]').addEventListener('click', closeModal);
+  document.querySelector('#alias-secrets-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      const data = await api(`/api/admin/aliases/${alias.id}/secrets`, { method: 'POST', body: JSON.stringify({ password: document.querySelector('#alias-secrets-password').value }) });
+      renderAliasSecrets(data);
+    } catch (error) {
+      document.querySelector('#modal-error').textContent = error.message;
+      button.disabled = false;
+    }
+  });
+  lucide.createIcons();
+}
+
+function renderAliasSecrets(data) {
+  const tokenMissing = data.queryTokenRecoverable ? '查询密钥为空。' : '这是升级前创建的旧查询密钥，数据库仅保存不可逆摘要。请重置密钥后再查看。';
+  openModal('密钥与 2FA', `<p class="muted">${escapeHtml(data.address)}。关闭窗口后，页面不会继续保留这些明文。</p>${secretSection('查询密钥', data.queryToken, 'copy-query-token', tokenMissing)}${secretSection('2FA 手动密钥', data.totp?.secret, 'copy-totp-secret', '该子邮箱尚未绑定 2FA。')}${data.totp ? `<section class="secret-section"><h3>当前 2FA 验证码</h3><div class="secret-row"><div class="secret-box code-secret">${escapeHtml(data.totp.code)}</div><button id="copy-totp-code-admin" class="btn btn-secondary btn-icon" type="button" title="复制 2FA 验证码" aria-label="复制 2FA 验证码"><i data-lucide="copy" class="icon"></i></button></div><p class="muted compact-note">${escapeHtml(data.totp.issuer || '第三方平台')}${data.totp.accountName ? ` · ${escapeHtml(data.totp.accountName)}` : ''}，剩余约 ${data.totp.remaining} 秒。</p></section>` : ''}`);
+  const bindCopy = (selector, value, message) => {
+    const button = document.querySelector(selector);
+    if (button) button.addEventListener('click', async () => { await navigator.clipboard.writeText(value); toastMessage(message); });
+  };
+  bindCopy('#copy-query-token', data.queryToken, '查询密钥已复制');
+  bindCopy('#copy-totp-secret', data.totp?.secret, '2FA 手动密钥已复制');
+  bindCopy('#copy-totp-code-admin', data.totp?.code, '2FA 验证码已复制');
+  lucide.createIcons();
 }
 
 function openAliasTotp(alias) {

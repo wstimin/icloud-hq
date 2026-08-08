@@ -160,6 +160,12 @@ tr:last-child td { border-bottom: 0; }
 .modal-head h2 { font-size: 18px; margin: 0; }
 .modal-body { padding: 20px; }
 .secret-box { background: #eff6f3; border: 1px solid #bbd9ce; padding: 14px; border-radius: 6px; font: 650 15px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; margin: 14px 0; }
+.secret-section + .secret-section { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 20px; }
+.secret-section h3 { margin: 0 0 10px; font-size: 14px; }
+.secret-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
+.secret-row .secret-box { margin: 0; }
+.secret-row .btn { height: auto; }
+.code-secret { font-size: 24px; letter-spacing: 0; }
 .qr { display: block; width: 220px; max-width: 100%; margin: 0 auto 15px; }
 .toast { position: fixed; right: 22px; bottom: 22px; background: #17262b; color: white; padding: 12px 16px; border-radius: 6px; box-shadow: var(--shadow); z-index: 40; max-width: 380px; }
 

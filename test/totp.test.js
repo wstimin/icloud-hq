@@ -31,11 +31,33 @@ test('generates the RFC 6238 compatible six digit token and timing metadata', ()
   });
 });
 
-test('server responses never expose a stored TOTP secret', () => {
+test('public and routine admin responses never expose a stored TOTP secret', () => {
   const server = require('node:fs').readFileSync('src/server.js', 'utf8');
+  const publicRoutes = server.slice(server.indexOf("app.post('/api/query'"), server.indexOf("app.post('/api/admin/login'"));
+  const stateRoute = server.slice(server.indexOf("app.get('/api/admin/state'"), server.indexOf("app.post('/api/admin/mail-account'"));
   assert.match(server, /res\.json\(\{ alias: maskEmail\(alias\.address\), label: alias\.label, totp: aliasTotpResponse\(alias\) \}\)/);
   assert.match(server, /totp_secret_encrypted IS NOT NULL\) AS totp_enabled/);
-  assert.doesNotMatch(server, /res\.json\([^\n]*parsed\.secret/);
+  assert.doesNotMatch(publicRoutes, /secret:\s*(?:parsed|totpSecret)/);
+  assert.match(stateRoute, /token_encrypted IS NOT NULL\) AS token_recoverable/);
+  assert.doesNotMatch(stateRoute, /a\.token_encrypted\s*,|decrypt\(|secret:/);
+});
+
+test('administrator secret reveal requires password confirmation and is audited', () => {
+  const fs = require('node:fs');
+  const server = fs.readFileSync('src/server.js', 'utf8');
+  const schema = fs.readFileSync('src/schema.sql', 'utf8');
+  const admin = fs.readFileSync('public/admin.js', 'utf8');
+  const route = server.slice(server.indexOf("app.post('/api/admin/aliases/:id/secrets'"), server.indexOf("app.put('/api/admin/aliases/:id/totp'"));
+  assert.match(schema, /token_encrypted TEXT/);
+  assert.match(server, /INSERT INTO aliases\(mail_account_id, address, label, token_digest, token_encrypted/);
+  assert.match(server, /\[accountId, address, label, digest\(token\), encrypt\(token\)/);
+  assert.match(server, /token_digest = \$1, token_encrypted = \$2/);
+  assert.match(route, /verifyPassword\(password/);
+  assert.match(route, /alias_secrets_revealed/);
+  assert.match(route, /queryToken: decrypt\(alias\.token_encrypted\)/);
+  assert.match(route, /secret: totpSecret/);
+  assert.match(admin, /data-alias-secrets/);
+  assert.match(admin, /当前管理员密码/);
 });
 
 test('mail and TOTP queries use separate public responses', () => {

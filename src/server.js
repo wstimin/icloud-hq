@@ -352,6 +352,7 @@ app.get('/api/admin/state', ...adminApi(async (req, res) => {
   const [accounts, aliases, recent, unmatched, auditResult] = await Promise.all([
     pool.query(`SELECT id, email, host, port, secure, enabled, status, last_error, last_synced_at, created_at FROM mail_accounts ORDER BY id`),
     pool.query(`SELECT a.id, a.mail_account_id, a.address, a.label, a.enabled, a.token_hint, a.token_expires_at, a.created_at,
+      (a.token_encrypted IS NOT NULL) AS token_recoverable,
       (a.totp_secret_encrypted IS NOT NULL) AS totp_enabled, a.totp_issuer, a.totp_account_name,
       (SELECT received_at FROM verification_messages v WHERE v.alias_id = a.id ORDER BY received_at DESC LIMIT 1) AS last_received_at
       FROM aliases a ORDER BY a.id DESC`),
@@ -415,11 +416,11 @@ app.post('/api/admin/aliases', ...adminApi(async (req, res) => {
   if (!validEmail(address) || !accountId) return res.status(400).json({ error: '请填写有效的子邮箱' });
   const token = `cv_${randomToken(24)}`;
   const result = await pool.query(
-    `INSERT INTO aliases(mail_account_id, address, label, token_digest, token_hint, token_expires_at)
-     VALUES ($1, $2, $3, $4, $5,
-       CASE WHEN $6::int IS NULL THEN NULL ELSE NOW() + ($6::text || ' days')::interval END)
+    `INSERT INTO aliases(mail_account_id, address, label, token_digest, token_encrypted, token_hint, token_expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6,
+       CASE WHEN $7::int IS NULL THEN NULL ELSE NOW() + ($7::text || ' days')::interval END)
      RETURNING id, address`,
-    [accountId, address, label, digest(token), token.slice(-6), expiresDays]
+    [accountId, address, label, digest(token), encrypt(token), token.slice(-6), expiresDays]
   );
   await audit({ actor: `user:${req.admin.id}`, action: 'alias_created', target: address, ip: extractClientIp(req) });
   res.status(201).json({ ok: true, alias: result.rows[0], token });
@@ -428,9 +429,9 @@ app.post('/api/admin/aliases', ...adminApi(async (req, res) => {
 app.post('/api/admin/aliases/:id/regenerate', ...adminApi(async (req, res) => {
   const token = `cv_${randomToken(24)}`;
   const result = await pool.query(
-    `UPDATE aliases SET token_digest = $1, token_hint = $2, enabled = TRUE, updated_at = NOW()
-     WHERE id = $3 RETURNING address`,
-    [digest(token), token.slice(-6), req.params.id]
+    `UPDATE aliases SET token_digest = $1, token_encrypted = $2, token_hint = $3,
+     enabled = TRUE, updated_at = NOW() WHERE id = $4 RETURNING address`,
+    [digest(token), encrypt(token), token.slice(-6), req.params.id]
   );
   if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
   await audit({ actor: `user:${req.admin.id}`, action: 'alias_token_regenerated', target: result.rows[0].address, ip: extractClientIp(req) });
@@ -442,6 +443,41 @@ app.post('/api/admin/aliases/:id/toggle', ...adminApi(async (req, res) => {
   if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
   await audit({ actor: `user:${req.admin.id}`, action: 'alias_toggled', target: result.rows[0].address, ip: extractClientIp(req) });
   res.json({ ok: true });
+}));
+
+app.post('/api/admin/aliases/:id/secrets', ...adminApi(async (req, res) => {
+  noStore(res);
+  const ip = extractClientIp(req);
+  const limit = rateLimit(`admin-secret:${req.admin.id}:${ip}`, 10, 15 * 60 * 1000);
+  if (!limit.allowed) return res.status(429).json({ error: '敏感信息查看过于频繁，请稍后再试' });
+
+  const password = String(req.body.password || '');
+  const passwordResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.admin.id]);
+  if (!passwordResult.rowCount || !(await verifyPassword(password, passwordResult.rows[0].password_hash))) {
+    await audit({ actor: `user:${req.admin.id}`, action: 'alias_secrets_reveal_failed', target: String(req.params.id), ip });
+    return res.status(403).json({ error: '当前管理员密码不正确' });
+  }
+
+  const result = await pool.query(
+    `SELECT address, token_encrypted, totp_secret_encrypted, totp_issuer, totp_account_name
+     FROM aliases WHERE id = $1`,
+    [req.params.id]
+  );
+  if (!result.rowCount) return res.status(404).json({ error: '子邮箱不存在' });
+  const alias = result.rows[0];
+  const totpSecret = decrypt(alias.totp_secret_encrypted);
+  await audit({ actor: `user:${req.admin.id}`, action: 'alias_secrets_revealed', target: alias.address, ip });
+  res.json({
+    address: alias.address,
+    queryToken: decrypt(alias.token_encrypted),
+    queryTokenRecoverable: Boolean(alias.token_encrypted),
+    totp: totpSecret ? {
+      secret: totpSecret,
+      ...generateTotp(totpSecret),
+      issuer: alias.totp_issuer || '',
+      accountName: alias.totp_account_name || ''
+    } : null
+  });
 }));
 
 app.put('/api/admin/aliases/:id/totp', ...adminApi(async (req, res) => {
